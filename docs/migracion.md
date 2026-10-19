@@ -89,6 +89,8 @@ import { INV_ICONOS, INV_TIPOS, invIcono, invTipoIcono, invRef, normalizarInvent
 | `/inventario` | `InventarioView` | tab Inventario (`inv*`) |
 | `/home` | `HomeView` | tab Home (`renderHome`, alertas) |
 | `/` | redirige a `/muro-publico` | era el tab activo por defecto |
+| `/asignaciones-equipos` | redirige a `/equipos-asignados` | URL de la pagina suelta equivalente |
+| `/equipos-oficina` | redirige a `/equipos-asignados` | URL del modulo anterior (registros legados) |
 
 ## Cambios de comportamiento (a propósito)
 
@@ -101,17 +103,49 @@ import { INV_ICONOS, INV_TIPOS, invIcono, invTipoIcono, invRef, normalizarInvent
 - **`menu`**: el item "Home" apunta a `/home`, no a `/`, porque `/` abre el Muro Público
   igual que el original (el panel `active` por defecto).
 
+## Paginas sueltas del sitio original
+
+En el `firebase.json` original habia rewrites a estas paginas, aunque el menu no las
+enlazaba. Estado de cada una:
+
+| Pagina | Que era | Decision |
+| --- | --- | --- |
+| `muro-publico.html` | Muro publico con reservas | Cubierta por `MuroPublicoView` (`/muro-publico`). |
+| `checklist-despacho.html` | Formulario de fichas de despacho | Cubierta por `ChecklistDespachoView` (`/checklist-despacho`). |
+| `mant-equipos.html` | Mantenimiento de equipos (iframe) | Cubierta por `MantEquiposView` (`/mant-equipos`). |
+| `asignaciones-equipos.html` | Modulo de asignaciones basado en inventario | Es el mismo modulo que `EquiposAsignadosView`; no se migra aparte. |
+| `equipos-oficina.html` | Modulo **anterior**: CRUD sobre `equiposOficina` | No se migra: esta en desuso (ver abajo). Sus registros se ven en `EquiposAsignadosView`. |
+
+### Evidencia de que `equipos-oficina.html` esta en desuso
+
+Consulta del 2026-10-19 (lectura anonima, como hace la app):
+
+- `equiposOficina`: 17 registros, **todos creados entre el 2026-06-18 y el 2026-07-21**.
+  Solo 1 tiene devolucion y 1 tiene `updatedAt` (2026-08-31).
+- El modulo nuevo si tiene actividad: `asignacionesEquipos` hasta 2026-09-24 y
+  `movimientosEquipos` hasta 2026-09-24.
+
+Es decir: no se crean equipos desde esa pantalla hace ~3 meses; los 17 registros son
+la carga historica que el modulo nuevo ya muestra como "registros anteriores". Aun
+asi, sus datos siguen visibles y se les puede registrar la devolucion desde
+`EquiposAsignadosView`.
+
 ## Pendientes / decisiones abiertas
 
-- `equipos-oficina.html`, `asignaciones-equipos.html` y `muro-publico.html` quedan
-  cubiertos por las vistas; decidir si se borran del hosting original.
-- `equipos-oficina.html` y `asignaciones-equipos.html` **no se migraron como vistas
-  propias**: son versiones sueltas/duplicadas de lo que hacen `MuroPublicoView` y
-  `EquiposAsignadosView`. Si Lina las usaba por separado, hay que decidir si se crean
-  rutas para ellas.
 - `firebase.json` ya apunta `hosting.public` a `dist` con el rewrite `** → /index.html` (SPA).
-- **Seguridad:** el original tiene `service-account.json` y `firebase-admin`.
-  Nunca deben ir al cliente ni al repositorio; si se subieron, rotar la clave.
+- **Atencion: `firestore.rules` no coincide con lo desplegado.** El archivo del repo
+  original dice `allow read: if true`, pero las reglas en produccion exigen sesion
+  (`request.auth != null`): sin autenticarse, toda lectura da `permission-denied`. Por
+  eso la app original carga los datos recien despues del login y `muro-publico.html`
+  entraba de forma anonima. **Antes de tocar reglas, alinear `firestore.rules` con las
+  reglas reales** (o desplegar solo `--only hosting`) para no abrir la base de datos
+  por accidente.
+- **Seguridad:** el original tiene `service-account.json` y `firebase-admin` en
+  `package.json` (sin uso). `service-account.json` esta en su `.gitignore` y nunca se
+  subio al repositorio; aun asi conviene borrarlo del disco.
+- **`checklistDespacho` esta vacia**: los datos reales del checklist estan en
+  `checklistDespachoRutas` (10 fichas). De ahi que `ChecklistDespachoView` lea/guarde
+  en `checklistDespachoRutas` y no en el store.
 - El respaldo en `localStorage` se eliminó a propósito.
 - `src/utils/inventario.js` incluye los iconos completos de `INV_ICONOS`/`INV_TIPOS`
   tal cual el original (`Computador`, `Router`, `Teléfono`, …).

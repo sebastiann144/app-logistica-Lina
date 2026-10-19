@@ -66,6 +66,13 @@ const router = createRouter({
       component: () => import('@/views/InventarioView.vue'),
       meta: { requiere: 'admin' },
     },
+    // URLs de las paginas sueltas del sitio original que ya no existen como
+    // pantalla propia. Se mantienen para no romper enlaces guardados:
+    //  - /asignaciones-equipos.html era el mismo modulo que EquiposAsignadosView.
+    //  - /equipos-oficina.html era el modulo anterior; sus registros se ven como
+    //    "registros anteriores" dentro de Equipos Asignados.
+    { path: '/asignaciones-equipos', redirect: '/equipos-asignados' },
+    { path: '/equipos-oficina', redirect: '/equipos-asignados' },
     // Ruta comodin: cualquier URL desconocida vuelve al muro publico.
     { path: '/:pathMatch(.*)*', redirect: '/muro-publico' },
   ],

@@ -80,5 +80,9 @@ npx firebase deploy --only hosting
   `firebase-admin`: son del lado servidor. Si alguna vez se subieron a algún repo,
   hay que **rotar la clave** desde la Consola de Firebase (Configuración del proyecto →
   Cuentas de servicio) y borrarla del historial de git.
-- Las reglas de Firestore están en `firestore.rules`. Revisar que `/prestamos` no
-  quede abierto a escritura pública.
+- Las reglas de Firestore están en `firestore.rules`, pero **ese archivo no refleja lo
+  desplegado** en el proyecto: fue copiado del repositorio original y en producción las
+  reglas exigen sesión. Por eso `firebase.json` **no** tiene sección `firestore`: un
+  `npx firebase deploy` normal solo publica el hosting y no puede pisar las reglas por
+  accidente. Antes de tocar reglas, comparar con las reales (Consola de Firebase →
+  Firestore → Reglas) y recién entonces agregar la sección `firestore` al `firebase.json`.

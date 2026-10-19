@@ -1,3 +1,13 @@
+// ATENCION: este archivo NO refleja las reglas desplegadas en el proyecto.
+//
+// Fue copiado del repositorio original, pero en produccion las reglas exigen
+// sesion (se comprobo el 2026-10-19: sin autenticarse, toda lectura responde
+// `permission-denied`). Por eso la app original cargaba los datos despues del
+// login y muro-publico.html entraba de forma anonima.
+//
+// No desplegar estas reglas tal cual: abririan la base de datos a lectura
+// publica y anularian la restriccion actual. Alinear con las reglas reales
+// antes de tocar `firestore:rules`, o desplegar solo el hosting.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
