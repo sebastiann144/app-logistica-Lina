@@ -10,15 +10,18 @@ la migración. La app original está en
 | --- | --- |
 | `src/firebase/` | Inicialización del SDK **modular** de Firebase (`app`, `db`, `auth`) y la configuración. Reemplaza los `<script>` compat que el original cargaba por CDN en cada página. |
 | `src/services/firestore.js` | `listar`, `crear`, `actualizar`, `eliminar`, `obtener`. Punto único de acceso a Firestore. |
-| `src/stores/auth.js` | Sesión, roles (`esAdmin`, `esEditorEquipos`, `esVisitanteMant`) y modal de login. |
+| `src/stores/auth.js` | Sesión, roles (`esAdmin`, `esEditorEquipos`, `esVisitanteMant`), modal de login y estado de conexión (`errorSesion`, `reintentarSesion`). |
 | `src/stores/datos.js` | Las 14 colecciones que el original cargaba en variables globales, ahora en un store de Pinia. |
+| `src/stores/filtro.js` | Filtro global por vehículo (Pinia). Lo comparten Home, Vehículos y Préstamo Carros; la barra vive en `App.vue`. |
+| `src/composables/useBorrador.js` | Borrador automático de formularios en `localStorage` (sin enviar), con caducidad de 7 días. |
 | — | Hay colecciones que el original **no** cargaba al inicio y que se piden dentro de su vista: `mantEquipos` (Mant. Equipos) y `personasEquipos`, `asignacionesEquipos`, `devolucionesEquipos`, `movimientosEquipos`, `equiposOficina` (Equipos Asignados). Se leen con `listar()` en `onMounted` y se guardan en `ref([])` locales. |
 | `src/assets/base.css` | El CSS compartido extraído del `<style>` de `index.html`. |
-| `src/components/layout/` | Shell: sidebar, nav móvil, barra de sesión, modal de login. |
+| `src/components/layout/` | Shell: sidebar, nav móvil, barra de sesión, modal de login y barra del filtro global. |
 | `src/components/ui/` | `BaseModal` (reemplaza `cerrarModal(id)`) y `FirmaCanvas` (reemplaza `initFirma`/`capturarFirma`). |
+| `src/components/equipos/` | `ReservasEquiposPanel` (listado + formulario de reservas de equipos, compartido por Muro y Préstamo Equipos). |
 | `src/nav.js` | Los items del menú con el rol que los puede ver. |
 | `src/views/` | Una vista `.vue` por cada "tab"/página del original. |
-| `src/utils/` | Helpers compartidos (`fechas`, `inventario`). |
+| `src/utils/` | Helpers compartidos (`fechas`, `inventario`, `areas`). |
 
 ## Equivalencias al traducir
 
@@ -36,12 +39,12 @@ la migración. La app original está en
 | `db.collection('x').orderBy('createdAt').get()` | `datos.recargar('x')` |
 | `[...arr].reverse()` (lo último primero) | `computed(() => [...arr].reverse())` |
 | `usuarioActual.uid` | `auth.usuario?.uid` |
-| `localStorage` | se elimina: Firestore es la única fuente de verdad |
+| `localStorage` (respaldo de datos) | se elimina: Firestore es la única fuente de verdad. Solo se usa para borradores de formularios y plantillas del checklist. |
 | `iframe` a otra página | ruta del router + vista de Vue |
 
 ## Reglas
 
-1. **Nada de `document.*`, `innerHTML`, `onclick=` ni `localStorage`** en las vistas.
+1. **Nada de `document.*`, `innerHTML` ni `onclick=`** en las vistas.
 2. Los textos, emojis y clases CSS se copian **igual** al original.
 3. Los `id` del original que sólo servían para el JS desaparecen; las clases CSS se conservan.
 4. Las listas que el original ordenaba con `.reverse()` se leen con un `computed`.
@@ -49,6 +52,8 @@ la migración. La app original está en
    (o `datos.recargarVarias(['a','b'])` si afecta varias).
 6. `<style scoped>` para lo propio de la vista; lo compartido va en `base.css`.
 7. Un commit por vista terminada.
+8. Los formularios nuevos usan `useBorrador` para no perder lo escrito al recargar;
+   Firestore sigue siendo la fuente de verdad (el borrador se borra al guardar).
 
 ## API de los componentes compartidos
 
@@ -61,19 +66,37 @@ la migración. La app original está en
 ```
 
 ```js
-import { actualizar, crear, eliminar, listar } from '@/services/firestore'
+import { actualizar, crear, eliminar, listar, listarTodos } from '@/services/firestore'
 import { useAuthStore } from '@/stores/auth'
 import { useDatosStore } from '@/stores/datos'
+import { useFiltroStore } from '@/stores/filtro'
+import { useBorrador } from '@/composables/useBorrador'
 import { ahora, diffDias, hoy, formatearFecha } from '@/utils/fechas'
+import { AREAS, etiquetaArea } from '@/utils/areas'
 import { INV_ICONOS, INV_TIPOS, invIcono, invTipoIcono, invRef, normalizarInventario } from '@/utils/inventario'
 ```
 
 - `crear(nombre, datos)` agrega `createdAt: serverTimestamp()` solo.
+- `listar(nombre, campo = 'createdAt')` ordena por un campo; `listarTodos(nombre)` lee
+  sin `orderBy` (necesario para `checklistDespachoRutas`, que tiene fichas sin fecha).
 - `datos` expone: `vehiculos, mantenimientos, gasolina, liquidos, permisos, revisionGas,
   soat, kilometraje, prestamos, reservas, equipos, reservasEquipos, inventario,
-  checklistDespacho, cargando, error` + `recargar, recargarVarias, aplicar, toma`.
+  checklistDespachoRutas, cargando, cargado, error` + `recargar, recargarVarias, aplicar, toma`.
 - `auth` expone: `esAdmin, esEditorEquipos, esVisitanteMant, puedeVerMantEquipos,
-  puedeVerEquiposAsignados, puedeEditarEquipos, usuario, etiquetaUsuario`.
+  puedeVerEquiposAsignados, puedeEditarEquipos, usuario, etiquetaUsuario, listo,
+  cargandoSesion, errorSesion, reintentarSesion`.
+- `filtro` (global): `vehiculo, activo, opciones, etiqueta, filtrar(lista, campo), coincide(item, campo), seleccionar(valor), limpiar()`.
+- `useBorrador({ clave, fuente, obtener, aplicar, activo, alRestaurar })` devuelve
+  `restaurado, reiniciar, limpiar, restaurar, guardar`. Se usa en cada modal nuevo:
+
+```js
+const borrador = useBorrador({
+  clave: 'admin:prestamo-carro',
+  fuente: formPrestamo,
+  activo: () => modalPrestamo.value && !formPrestamo.value.id,
+  alRestaurar: () => { modalPrestamo.value = true },
+})
+```
 
 ## Rutas
 
@@ -95,11 +118,25 @@ import { INV_ICONOS, INV_TIPOS, invIcono, invTipoIcono, invRef, normalizarInvent
 ## Cambios de comportamiento (a propósito)
 
 - **Filtro por vehículo**: en el original `filtroVehiculo` era una variable global que
-  filtraba también las tablas de otros tabs (un efecto oculto). Ahora el selector vive
-  sólo dentro de `VehiculosView` y filtra esa pantalla; las demás muestran todo.
-- **Reservas de equipos**: existían en el Muro y en el tab de equipos (`muroReservasEquiposList`).
-  Quedaron en un solo lugar: `MuroPublicoView`.
-- **Sin `localStorage`**: Firestore es la única fuente de verdad.
+  filtraba también las tablas de otros tabs (un efecto oculto). Aquí se recuperó ese
+  comportamiento como estado compartido (`useFiltroStore`): la barra aparece en Home,
+  Vehículos y Préstamo Carros, y la misma placa filtra tablas, contadores, reservas y
+  alertas de esas tres pantallas. Es solo para admin.
+- **Reservas de equipos**: el original las mostraba únicamente en el Muro. Ahora un
+  componente compartido (`ReservasEquiposPanel`) las muestra en el Muro (modo compacto)
+  y en Préstamo Equipos (tabla con confirmar/eliminar), y permite reservar desde ambas.
+- **Borradores**: los formularios nuevos guardan lo escrito en `localStorage` (clave
+  `lina:borrador:<nombre>`, caducan a los 7 días) y se restauran al recargar. No son
+  fuente de datos: Firestore sigue siendo la verdad y el borrador se borra al guardar.
+  Las plantillas del checklist conservan las claves originales `checklist-template-<tipo>`.
+- **Checklist de Despacho**: Home, el historial y el autocompletado leen la colección
+  real `checklistDespachoRutas` (sin `orderBy`), no la vieja `checklistDespacho` vacía.
+  Home muestra un resumen de fichas y una alerta si una ficha lleva fecha pasada y sigue
+  en `Preparando`.
+- **Sesión anónima**: la app espera a que termine `signInAnonymously` antes de pedir
+  datos (antes el primer `onAuthStateChanged(null)` disparaba las consultas sin
+  `request.auth` y todo daba `permission-denied`). Si la conexión falla o tarda más de
+  12 s, se muestra un error con botón de reintento en vez del Muro vacío.
 - **`menu`**: el item "Home" apunta a `/home`, no a `/`, porque `/` abre el Muro Público
   igual que el original (el panel `active` por defecto).
 
@@ -143,9 +180,10 @@ asi, sus datos siguen visibles y se les puede registrar la devolucion desde
 - **Seguridad:** el original tiene `service-account.json` y `firebase-admin` en
   `package.json` (sin uso). `service-account.json` esta en su `.gitignore` y nunca se
   subio al repositorio; aun asi conviene borrarlo del disco.
-- **`checklistDespacho` esta vacia**: los datos reales del checklist estan en
-  `checklistDespachoRutas` (10 fichas). De ahi que `ChecklistDespachoView` lea/guarde
-  en `checklistDespachoRutas` y no en el store.
-- El respaldo en `localStorage` se eliminó a propósito.
+- **`checklistDespacho` está vacía**: los datos reales del checklist están en
+  `checklistDespachoRutas` (10 fichas). Toda la app (Home, historial y store) lee y
+  guarda en `checklistDespachoRutas`.
+- El respaldo de **datos** en `localStorage` se eliminó a propósito. `localStorage` solo
+  guarda borradores de formularios y las plantillas del checklist.
 - `src/utils/inventario.js` incluye los iconos completos de `INV_ICONOS`/`INV_TIPOS`
   tal cual el original (`Computador`, `Router`, `Teléfono`, …).

@@ -548,6 +548,80 @@ tr:hover td {
   border-color: #0f3460;
 }
 
+/* Caja de reservas compartida (Muro Publico y Prestamo Equipos). */
+.reserva-box {
+  border-radius: 10px;
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.75rem;
+}
+.reserva-box-carros {
+  background: #fef9e7;
+  border: 1.5px solid #f5d76e;
+}
+.reserva-box-equipos {
+  background: #f0fdf4;
+  border: 1.5px solid #86efac;
+}
+.reserva-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.reserva-title {
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.reserva-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 0.8rem;
+}
+.reserva-item-equipo {
+  border-bottom-color: #bbf7d0;
+}
+
+/* Avisos dentro de formularios. */
+.aviso-inline {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.78rem;
+  margin: 0 0 0.75rem;
+}
+.aviso-inline.aviso-error {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+.borrador-aviso {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.78rem;
+  margin-bottom: 0.75rem;
+}
+
+/* Estado de conexion inicial (App.vue). */
+.estado-conexion {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: #6b7280;
+  font-size: 0.9rem;
+}
+.estado-conexion .btn {
+  margin-top: 0.75rem;
+}
+
 @media (max-width: 768px) {
   .sidebar {
     width: 0;

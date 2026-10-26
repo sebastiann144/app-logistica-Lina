@@ -16,6 +16,8 @@ import { ADMIN_EMAIL, EDITOR_EQUIPOS_EMAIL, VISITANTE_MANT_EMAIL, auth } from '@
 export const useAuthStore = defineStore('auth', () => {
   const usuario = ref(null)
   const listo = ref(false)
+  const cargandoSesion = ref(false)
+  const errorSesion = ref('')
   const loginAbierto = ref(false)
   const errorLogin = ref('')
   const avisoReset = ref('')
@@ -37,23 +39,73 @@ export const useAuthStore = defineStore('auth', () => {
 
   let iniciado = false
   let resolverListo = null
-  // Se resuelve la primera vez que Firebase responde quien es el usuario.
-  // El router la espera antes de decidir si puede mostrar una ruta de admin.
+  let intentandoAnonimo = false
+  // Se resuelve cuando ya se sabe quien es el usuario Y, si no hay cuenta, ya se
+  // intento abrir la sesion anonima. El router la espera antes de decidir si
+  // puede mostrar una ruta de admin y App.vue antes de pedir los datos.
   const promesaListo = new Promise((resolve) => {
     resolverListo = resolve
   })
+
+  const ESPERA_SESION_MS = 12000
+
+  function resolver() {
+    if (listo.value) return
+    listo.value = true
+    resolverListo()
+  }
+
+  // Si Firebase no responde (red lenta), no se deja el Muro en blanco para
+  // siempre: a los 12 s se muestra el error con boton de reintentar.
+  function conLimite(promesa) {
+    return Promise.race([
+      promesa,
+      new Promise((_, rechazar) => {
+        setTimeout(() => rechazar(new Error('tiempo de espera agotado')), ESPERA_SESION_MS)
+      }),
+    ])
+  }
 
   // Se llama una sola vez al arrancar la app (ver App.vue).
   function iniciar() {
     if (iniciado) return promesaListo
     iniciado = true
-    onAuthStateChanged(auth, (user) => {
+    cargandoSesion.value = true
+    // Red de seguridad: si Firebase ni siquiera entrega el estado inicial de la
+    // sesion (red caida a medias), no se deja la app en "Conectando..." para
+    // siempre.
+    setTimeout(() => {
+      if (listo.value) return
+      errorSesion.value =
+        'No se pudo conectar con el servidor. Revisa la conexión e inténtalo de nuevo.'
+      cargandoSesion.value = false
+      resolver()
+    }, ESPERA_SESION_MS)
+    onAuthStateChanged(auth, async (user) => {
       usuario.value = user
-      listo.value = true
-      resolverListo()
-      // El muro publico hacia signInAnonymously() para que un visitante sin
-      // cuenta pudiera escribir reservas. Se conserva igual.
-      if (!user) signInAnonymously(auth).catch(() => {})
+      if (user) {
+        errorSesion.value = ''
+        cargandoSesion.value = false
+        resolver()
+        return
+      }
+      // No hay cuenta: el muro publico y las reglas de Firestore necesitan una
+      // sesion (request.auth != null), asi que se entra como anonimo.
+      if (intentandoAnonimo) return
+      intentandoAnonimo = true
+      cargandoSesion.value = true
+      try {
+        await conLimite(signInAnonymously(auth))
+        // onAuthStateChanged volvera a llamar con el usuario anonimo.
+      } catch (e) {
+        console.error('No se pudo iniciar la sesion anonima', e)
+        errorSesion.value =
+          'No se pudo conectar con el servidor. Revisa la conexión e inténtalo de nuevo.'
+        cargandoSesion.value = false
+        resolver()
+      } finally {
+        intentandoAnonimo = false
+      }
     })
     return promesaListo
   }
@@ -113,10 +165,32 @@ export const useAuthStore = defineStore('auth', () => {
     await signOut(auth)
   }
 
+  // Reintenta la sesion anonima cuando fallo la conexion inicial.
+  async function reintentarSesion() {
+    if (usuario.value) {
+      errorSesion.value = ''
+      return true
+    }
+    errorSesion.value = ''
+    cargandoSesion.value = true
+    try {
+      await conLimite(signInAnonymously(auth))
+      return true
+    } catch (e) {
+      console.error('No se pudo reintentar la sesion anonima', e)
+      errorSesion.value =
+        'No se pudo conectar con el servidor. Revisa la conexión e inténtalo de nuevo.'
+      return false
+    } finally {
+      cargandoSesion.value = false
+    }
+  }
+
   // Comportamiento del boton de la barra de sesion:
-  // si ya es admin cierra sesion; si no, abre el modal de acceso.
+  // si hay cualquier cuenta abierta (admin, editor o mantenimiento) cierra
+  // sesion; si no, abre el modal de acceso.
   function alPresionarBotonSesion() {
-    if (esAdmin.value) {
+    if (usuario.value) {
       cerrarSesion()
       return
     }
@@ -126,6 +200,8 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     usuario,
     listo,
+    cargandoSesion,
+    errorSesion,
     loginAbierto,
     errorLogin,
     avisoReset,
@@ -139,6 +215,7 @@ export const useAuthStore = defineStore('auth', () => {
     etiquetaUsuario,
     iniciar,
     esperarListo,
+    reintentarSesion,
     puede,
     abrirLogin,
     cerrarLogin,

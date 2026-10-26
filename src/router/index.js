@@ -17,7 +17,7 @@ const router = createRouter({
       path: '/home',
       name: 'home',
       component: () => import('@/views/HomeView.vue'),
-      meta: { requiere: 'admin' },
+      meta: { requiere: 'admin', filtroVehiculo: true },
     },
     {
       path: '/muro-publico',
@@ -28,13 +28,13 @@ const router = createRouter({
       path: '/vehiculos',
       name: 'vehiculos',
       component: () => import('@/views/VehiculosView.vue'),
-      meta: { requiere: 'admin' },
+      meta: { requiere: 'admin', filtroVehiculo: true },
     },
     {
       path: '/prestamo-carros',
       name: 'prestamo-carros',
       component: () => import('@/views/PrestamoCarrosView.vue'),
-      meta: { requiere: 'admin' },
+      meta: { requiere: 'admin', filtroVehiculo: true },
     },
     {
       path: '/prestamo-equipos',

@@ -45,6 +45,15 @@ export async function listar(nombre, campo = 'createdAt') {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
 }
 
+// Igual que listar() pero sin orderBy. Firestore excluye los documentos que no
+// tienen el campo de orden, asi que se usa en colecciones historicas donde
+// algunos registros viejos no lo tienen (por ejemplo checklistDespachoRutas:
+// hay fichas sin createdAt).
+export async function listarTodos(nombre) {
+  const snap = await getDocs(collection(db, nombre))
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+}
+
 // Equivale a: const ref = db.collection(nombre).doc(); ref.set(datos)
 export async function crear(nombre, datos) {
   const ref = await addDoc(collection(db, nombre), {

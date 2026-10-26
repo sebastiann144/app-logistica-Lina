@@ -1,9 +1,10 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppAuthBar from '@/components/layout/AppAuthBar.vue'
 import AppMobileNav from '@/components/layout/AppMobileNav.vue'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
+import FiltroVehiculoBar from '@/components/layout/FiltroVehiculoBar.vue'
 import LoginAdminModal from '@/components/layout/LoginAdminModal.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useDatosStore } from '@/stores/datos'
@@ -19,11 +20,39 @@ const route = useRoute()
 // llevan cabecera (el original ocultaba .header y .auth-bar en esos tabs).
 const sinShell = computed(() => !!route.meta.sinShell)
 
+// El filtro global por vehiculo solo aplica a las rutas que lo consumen y solo
+// para el admin (las demas cuentas no ven las tablas de vehiculos).
+const mostrarFiltro = computed(
+  () => !sinShell.value && !!route.meta.filtroVehiculo && auth.esAdmin,
+)
+
+// Mientras no se sabe si hay sesion no se piden datos: sin request.auth las
+// reglas de Firestore devuelven permission-denied y el muro quedaria vacio.
+const conectando = computed(() => !auth.listo)
+
 onMounted(async () => {
-  // Espera a saber quien es el usuario antes de pedir los datos.
   await auth.iniciar()
-  await datos.cargarTodo()
+  if (!auth.errorSesion) await datos.cargarTodo()
 })
+
+// Si la sesion anonima fallo por red y luego se recupera sola, se cargan los
+// datos pendientes.
+watch(
+  () => auth.usuario?.uid,
+  async (uid) => {
+    if (uid && !datos.cargado && !datos.cargando && !auth.errorSesion) {
+      await datos.cargarTodo()
+    }
+  },
+)
+
+async function reintentar() {
+  if (auth.errorSesion) {
+    const ok = await auth.reintentarSesion()
+    if (!ok) return
+  }
+  await datos.cargarTodo()
+}
 </script>
 
 <template>
@@ -36,11 +65,32 @@ onMounted(async () => {
     </div>
     <AppAuthBar v-if="!sinShell" />
     <div v-if="sinShell" class="embed-wrapper">
-      <RouterView />
+      <div v-if="conectando" class="estado-conexion">Conectando con el servidor…</div>
+      <RouterView v-else />
     </div>
     <div v-else class="container">
-      <div v-if="datos.cargando" class="loading-bar show">Cargando datos desde la nube...</div>
-      <RouterView />
+      <div v-if="conectando" class="estado-conexion">Conectando con el servidor…</div>
+
+      <div v-else-if="auth.errorSesion" class="alert-bar show">
+        <h3>No se pudo conectar con el servidor</h3>
+        <p>{{ auth.errorSesion }}</p>
+        <button class="btn btn-primary btn-sm" @click="reintentar">Reintentar</button>
+      </div>
+
+      <template v-else>
+        <div v-if="datos.cargando" class="loading-bar show">Cargando datos desde la nube...</div>
+
+        <template v-else>
+          <div v-if="datos.error" class="alert-bar show">
+            <h3>Algunos datos no se pudieron cargar</h3>
+            <p>{{ datos.error }}</p>
+            <button class="btn btn-primary btn-sm" @click="reintentar">Reintentar</button>
+          </div>
+
+          <FiltroVehiculoBar v-if="mostrarFiltro" />
+          <RouterView />
+        </template>
+      </template>
     </div>
   </div>
   <LoginAdminModal />

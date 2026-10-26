@@ -8,9 +8,12 @@
 import { computed, ref } from 'vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import FirmaCanvas from '@/components/ui/FirmaCanvas.vue'
+import ReservasEquiposPanel from '@/components/equipos/ReservasEquiposPanel.vue'
 import { actualizar, crear, eliminar } from '@/services/firestore'
 import { useAuthStore } from '@/stores/auth'
 import { useDatosStore } from '@/stores/datos'
+import { useBorrador } from '@/composables/useBorrador'
+import { AREAS, etiquetaArea } from '@/utils/areas'
 import { ahora, hoy } from '@/utils/fechas'
 
 const auth = useAuthStore()
@@ -21,9 +24,6 @@ const prestamos = computed(() => [...datos.prestamos].reverse())
 const equipos = computed(() => [...datos.equipos].reverse())
 // Una reserva confirmada pasa a estado "Solicitado" y sale de la lista.
 const reservas = computed(() => datos.reservas.filter((r) => r.estado !== 'Solicitado'))
-const reservasEquipos = computed(() =>
-  datos.reservasEquipos.filter((r) => r.estado !== 'Solicitado'),
-)
 const opcionesVehiculos = computed(() =>
   datos.vehiculos.map((v) => ({
     placa: v.placa,
@@ -31,32 +31,47 @@ const opcionesVehiculos = computed(() =>
   })),
 )
 
-const AREAS = [
-  'Administracion',
-  'Asesorias',
-  'Talento Humano',
-  'Operaciones',
-  'Clase Aparte',
-  'Gerencia',
-  'Otros',
-]
-const ETIQUETA_AREA = {
-  Administracion: 'Administración',
-  Asesorias: 'Asesorías',
-}
-
 // ---------------------------------------------------------------
 // Modales
 // ---------------------------------------------------------------
 const modalPrestamo = ref(false)
 const modalReserva = ref(false)
-const modalReservaEquipo = ref(false)
 const modalEquipo = ref(false)
 
 const formPrestamo = ref({})
 const formReserva = ref({})
-const formReservaEquipo = ref({})
 const formEquipo = ref({})
+
+// Borradores: si Lina recarga la pagina a mitad de un formulario no lo pierde.
+const borradorPrestamo = useBorrador({
+  clave: 'muro:prestamo-carro',
+  fuente: formPrestamo,
+  activo: () => modalPrestamo.value && !formPrestamo.value.id,
+  alRestaurar: () => {
+    modalPrestamo.value = true
+  },
+})
+const restauradoPrestamo = borradorPrestamo.restaurado
+
+const borradorReserva = useBorrador({
+  clave: 'muro:reserva-carro',
+  fuente: formReserva,
+  activo: () => modalReserva.value,
+  alRestaurar: () => {
+    modalReserva.value = true
+  },
+})
+const restauradoReserva = borradorReserva.restaurado
+
+const borradorEquipo = useBorrador({
+  clave: 'muro:prestamo-equipo',
+  fuente: formEquipo,
+  activo: () => modalEquipo.value && !formEquipo.value.id,
+  alRestaurar: () => {
+    modalEquipo.value = true
+  },
+})
+const restauradoEquipo = borradorEquipo.restaurado
 
 function abrirModalPrestamo(item) {
   formPrestamo.value = item
@@ -83,25 +98,13 @@ function abrirModalPrestamo(item) {
         obs: '',
       }
   modalPrestamo.value = true
+  if (!item) borradorPrestamo.reiniciar()
 }
 
 function abrirModalReserva() {
   formReserva.value = { solicitante: '', vehiculo: '', fecha: hoy(), hora: ahora() }
   modalReserva.value = true
-}
-
-function abrirModalReservaEquipo() {
-  formReservaEquipo.value = {
-    fechaSalida: hoy(),
-    entrega: '',
-    depto: '',
-    equipo: '',
-    ref: '',
-    cantidad: 1,
-    solicitante: '',
-    firma: '',
-  }
-  modalReservaEquipo.value = true
+  borradorReserva.reiniciar()
 }
 
 function abrirModalEquipo(item) {
@@ -131,6 +134,7 @@ function abrirModalEquipo(item) {
         firma: '',
       }
   modalEquipo.value = true
+  if (!item) borradorEquipo.reiniciar()
 }
 
 // ---------------------------------------------------------------
@@ -152,6 +156,7 @@ async function guardarPrestamo() {
   else await crear('prestamos', obj)
   await datos.recargar('prestamos')
   modalPrestamo.value = false
+  borradorPrestamo.limpiar()
 }
 
 async function guardarReserva() {
@@ -165,27 +170,7 @@ async function guardarReserva() {
   })
   await datos.recargar('reservas')
   modalReserva.value = false
-}
-
-async function guardarReservaEquipo() {
-  const f = formReservaEquipo.value
-  if (!f.firma) {
-    alert('La firma es obligatoria')
-    return
-  }
-  await crear('reservasEquipos', {
-    fechaSalida: f.fechaSalida,
-    entrega: f.entrega,
-    depto: f.depto,
-    equipo: f.equipo,
-    ref: f.ref || '',
-    cantidad: parseInt(f.cantidad) || 1,
-    solicitante: f.solicitante,
-    firma: f.firma,
-    estado: 'Pendiente',
-  })
-  await datos.recargar('reservasEquipos')
-  modalReservaEquipo.value = false
+  borradorReserva.limpiar()
 }
 
 async function guardarEquipo() {
@@ -205,6 +190,7 @@ async function guardarEquipo() {
   else await crear('equipos', obj)
   await datos.recargar('equipos')
   modalEquipo.value = false
+  borradorEquipo.limpiar()
 }
 
 // ---------------------------------------------------------------
@@ -224,24 +210,6 @@ async function confirmarReserva(r) {
     obs: 'Generado desde reserva',
   })
   await datos.recargarVarias(['reservas', 'prestamos'])
-}
-
-async function confirmarReservaEquipo(r) {
-  if (!auth.esAdmin) return
-  await actualizar('reservasEquipos', r.id, { estado: 'Solicitado' })
-  await crear('equipos', {
-    fechaSalida: r.fechaSalida || r.fecha || '',
-    entrega: r.entrega || '',
-    depto: r.depto || '',
-    equipo: r.equipo,
-    ref: r.ref || '',
-    cantidad: r.cantidad || 1,
-    solicitante: r.solicitante,
-    fechaEntrada: null,
-    firma: r.firma || '',
-    obs: 'Generado desde reserva',
-  })
-  await datos.recargarVarias(['reservasEquipos', 'equipos'])
 }
 
 // ---------------------------------------------------------------
@@ -360,38 +328,8 @@ function verFirma(dataUrl) {
           <button class="btn btn-primary btn-sm" @click="abrirModalEquipo()">+ Solicitar</button>
         </div>
 
-        <div class="reserva-box reserva-box-equipos">
-          <div class="reserva-head">
-            <span class="reserva-title" style="color: #166534">📅 Reservas Equipos</span>
-            <button
-              class="btn btn-outline btn-sm"
-              style="font-size: 0.7rem"
-              @click="abrirModalReservaEquipo()"
-            >
-              + Reservar
-            </button>
-          </div>
-          <div v-if="!reservasEquipos.length" class="empty" style="padding: 0.5rem; font-size: 0.8rem">
-            Sin reservas
-          </div>
-          <div v-for="r in reservasEquipos" :key="r.id" class="reserva-item reserva-item-equipo">
-            <span>
-              <strong>{{ r.solicitante }}</strong> — {{ r.equipo }}{{ r.ref ? ` (${r.ref})` : '' }}{{ r.depto ? ` · ${r.depto}` : '' }}
-              <span style="color: #6b7280">{{ r.fechaSalida || r.fecha || '' }}</span>
-            </span>
-            <span style="display: flex; gap: 0.3rem; align-items: center">
-              <span class="badge badge-yellow">Pendiente</span>
-              <button
-                v-if="auth.esAdmin"
-                class="btn btn-sm btn-success"
-                style="padding: 0.2rem 0.5rem; font-size: 0.7rem"
-                @click="confirmarReservaEquipo(r)"
-              >
-                ✓
-              </button>
-            </span>
-          </div>
-        </div>
+        <!-- Reservas de equipos: componente compartido con Prestamo Equipos -->
+        <ReservasEquiposPanel compacto />
 
         <div v-if="!equipos.length" class="empty">No hay préstamos de equipos</div>
         <div v-for="e in equipos" :key="e.id" class="loan-card">
@@ -440,6 +378,9 @@ function verFirma(dataUrl) {
     <!-- ============ MODAL PRESTAMO CARRO ============ -->
     <BaseModal :abierto="modalPrestamo" @cerrar="modalPrestamo = false">
       <h2>{{ formPrestamo.id ? 'Editar Préstamo' : 'Registrar Préstamo' }}</h2>
+      <p v-if="restauradoPrestamo" class="borrador-aviso">
+        Se recuperó el borrador que tenías sin guardar.
+      </p>
       <form @submit.prevent="guardarPrestamo">
         <div>
           <label>Vehículo</label>
@@ -473,6 +414,9 @@ function verFirma(dataUrl) {
     <!-- ============ MODAL RESERVA ============ -->
     <BaseModal :abierto="modalReserva" @cerrar="modalReserva = false">
       <h2>Nueva Reserva</h2>
+      <p v-if="restauradoReserva" class="borrador-aviso">
+        Se recuperó el borrador que tenías sin guardar.
+      </p>
       <form @submit.prevent="guardarReserva">
         <div><label>Solicitante</label><input v-model="formReserva.solicitante" required /></div>
         <div>
@@ -493,37 +437,12 @@ function verFirma(dataUrl) {
       </form>
     </BaseModal>
 
-    <!-- ============ MODAL RESERVA EQUIPO ============ -->
-    <BaseModal :abierto="modalReservaEquipo" @cerrar="modalReservaEquipo = false">
-      <h2>Reservar Equipo</h2>
-      <form @submit.prevent="guardarReservaEquipo">
-        <div><label>Fecha Salida</label><input v-model="formReservaEquipo.fechaSalida" type="date" /></div>
-        <div><label>Quien Entrega</label><input v-model="formReservaEquipo.entrega" /></div>
-        <div>
-          <label>Área</label>
-          <select v-model="formReservaEquipo.depto">
-            <option value="">Seleccione</option>
-            <option v-for="a in AREAS" :key="a" :value="a">{{ ETIQUETA_AREA[a] || a }}</option>
-          </select>
-        </div>
-        <div><label>Equipo</label><input v-model="formReservaEquipo.equipo" required /></div>
-        <div><label>Referencia</label><input v-model="formReservaEquipo.ref" /></div>
-        <div><label>Cantidad</label><input v-model="formReservaEquipo.cantidad" type="number" /></div>
-        <div><label>Solicitante</label><input v-model="formReservaEquipo.solicitante" required /></div>
-        <div class="full">
-          <label>Firma <span style="color: #dc2626">*</span></label>
-          <FirmaCanvas v-model="formReservaEquipo.firma" :alto="120" />
-        </div>
-        <div class="full" style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.3rem">
-          <button type="button" class="btn btn-outline" @click="modalReservaEquipo = false">Cancelar</button>
-          <button type="submit" class="btn btn-primary">Solicitar</button>
-        </div>
-      </form>
-    </BaseModal>
-
     <!-- ============ MODAL EQUIPO ============ -->
     <BaseModal :abierto="modalEquipo" @cerrar="modalEquipo = false">
       <h2>{{ formEquipo.id ? 'Editar Préstamo Equipo' : 'Registrar Préstamo Equipo' }}</h2>
+      <p v-if="restauradoEquipo" class="borrador-aviso">
+        Se recuperó el borrador que tenías sin guardar.
+      </p>
       <form @submit.prevent="guardarEquipo">
         <div><label>Fecha Salida</label><input v-model="formEquipo.fechaSalida" type="date" required /></div>
         <div><label>Quien Entrega</label><input v-model="formEquipo.entrega" required /></div>
@@ -531,7 +450,7 @@ function verFirma(dataUrl) {
           <label>Área</label>
           <select v-model="formEquipo.depto">
             <option value="">Seleccione</option>
-            <option v-for="a in AREAS" :key="a" :value="a">{{ ETIQUETA_AREA[a] || a }}</option>
+            <option v-for="a in AREAS" :key="a" :value="a">{{ etiquetaArea(a) }}</option>
           </select>
         </div>
         <div><label>Equipo</label><input v-model="formEquipo.equipo" required /></div>
@@ -572,43 +491,6 @@ function verFirma(dataUrl) {
   margin-bottom: 0.75rem;
   flex-wrap: wrap;
   gap: 0.5rem;
-}
-
-.reserva-box {
-  border-radius: 10px;
-  padding: 0.6rem 0.8rem;
-  margin-bottom: 0.75rem;
-}
-.reserva-box-carros {
-  background: #fef9e7;
-  border: 1.5px solid #f5d76e;
-}
-.reserva-box-equipos {
-  background: #f0fdf4;
-  border: 1.5px solid #86efac;
-}
-.reserva-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.5rem;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-.reserva-title {
-  font-weight: 700;
-  font-size: 0.85rem;
-}
-.reserva-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.4rem 0;
-  border-bottom: 1px solid #f0f0f0;
-  font-size: 0.8rem;
-}
-.reserva-item-equipo {
-  border-bottom-color: #bbf7d0;
 }
 
 .loan-card {

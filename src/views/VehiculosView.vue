@@ -13,10 +13,12 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import { actualizar, crear, eliminar } from '@/services/firestore'
 import { useAuthStore } from '@/stores/auth'
 import { useDatosStore } from '@/stores/datos'
+import { useFiltroStore } from '@/stores/filtro'
 import { diffDias, hoy } from '@/utils/fechas'
 
 const auth = useAuthStore()
 const datos = useDatosStore()
+const filtro = useFiltroStore()
 
 // ---------------------------------------------------------------
 // Sub-pestanas (original: cambiarSubTab, lineas 1609-1614)
@@ -34,21 +36,19 @@ const SUB_TABS = [
 const subTab = ref('subInfo')
 
 // ---------------------------------------------------------------
-// Filtro por vehiculo
+// Filtro por vehiculo (global)
 // (original: filtrarPorVehiculo/cambiarFiltroVehiculo/poblarFiltrosVehiculo,
-//  lineas 1270-1301). En Vue el <select> usa v-model, sin tocar el DOM.
-// VEHICULO_CAMPOS (1258-1268): en estas colecciones el campo siempre es "vehiculo".
+//  lineas 1270-1301). El estado vive en useFiltroStore para que la misma placa
+//  filtre tambien Home y Prestamo Carros. VEHICULO_CAMPOS (1258-1268): en estas
+//  colecciones el campo siempre es "vehiculo".
 // ---------------------------------------------------------------
-const filtro = ref('')
-
 function filtrar(arr) {
-  if (!filtro.value) return arr
-  return arr.filter((e) => e.vehiculo === filtro.value)
+  return filtro.filtrar(arr)
 }
 
 // Vehiculos que se usan en stats, fluidos, km y en las alertas por km (linea 2023).
 const vehiculosFiltrados = computed(() =>
-  filtro.value ? datos.vehiculos.filter((v) => v.placa === filtro.value) : datos.vehiculos,
+  filtro.vehiculo ? datos.vehiculos.filter((v) => v.placa === filtro.vehiculo) : datos.vehiculos,
 )
 
 // Listas "lo ultimo primero" (original: [...datos].reverse()).
@@ -101,7 +101,7 @@ const RESULTADOS_GAS = ['Aprobado', 'Reprobado', 'Pendiente']
 // ---------------------------------------------------------------
 // Stats (original: renderStats, lineas 3349-3365)
 // ---------------------------------------------------------------
-const statVehiculos = computed(() => (filtro.value ? 1 : datos.vehiculos.length))
+const statVehiculos = computed(() => (filtro.activo ? 1 : datos.vehiculos.length))
 
 const statPendientes = computed(() => {
   const limite = new Date(Date.now() + 30 * 86400000)
@@ -796,21 +796,6 @@ async function eliminarKm(item) {
         <div class="num">{{ statGas.toFixed(1) }}</div>
         <div class="lbl">Gas (Lts)</div>
       </div>
-    </div>
-
-    <!-- Filtro por vehiculo (original: filterBar, 566-572) -->
-    <div class="filter-bar">
-      <label>Filtrar por vehiculo:</label>
-      <select v-model="filtro">
-        <option v-if="!opcionesVehiculos.length" value="">No hay vehiculos</option>
-        <option v-else value="">Todos los vehiculos</option>
-        <option v-for="v in opcionesVehiculos" :key="v.placa" :value="v.placa">
-          {{ v.texto }}
-        </option>
-      </select>
-      <span v-if="filtro" style="font-size: 0.75rem; color: #6b7280">
-        Mostrando solo: {{ filtro }}
-      </span>
     </div>
 
     <!-- Sub-pestanas (original: 574-583) -->

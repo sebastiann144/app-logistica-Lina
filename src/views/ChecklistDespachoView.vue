@@ -8,25 +8,25 @@
 // ocupan v-model, v-for y computed.
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import FirmaCanvas from '@/components/ui/FirmaCanvas.vue'
-import { collection, crear, db, doc, listar, serverTimestamp, writeBatch } from '@/services/firestore'
+import { collection, crear, db, doc, serverTimestamp, writeBatch } from '@/services/firestore'
 import { useAuthStore } from '@/stores/auth'
+import { useDatosStore } from '@/stores/datos'
+import { useBorrador } from '@/composables/useBorrador'
 
 const auth = useAuthStore()
+const datos = useDatosStore()
 
 // Coleccion real de esta pantalla (checklist-despacho.html: 376, 498 y 528).
 // Ojo: el original guarda y consulta en `checklistDespachoRutas`, NO en
 // `checklistDespacho` (esa era una lista simple de index.html que ningun elemento
-// del DOM llegaba a mostrar). Por eso el historial y el autocompletado se cargan
-// aqui y no desde useDatosStore.
+// del DOM llegaba a mostrar).
+//
+// La coleccion vive en useDatosStore para que Home y el propio historial lean
+// exactamente los mismos registros (y los contadores no salgan en cero).
 const COLECCION_FICHAS = 'checklistDespachoRutas'
-const fichas = ref([])
+const fichas = computed(() => datos.checklistDespachoRutas)
 async function cargarFichas() {
-  try {
-    fichas.value = await listar(COLECCION_FICHAS, 'serviceDate')
-  } catch (e) {
-    console.warn('No se pudo cargar el historial de fichas:', e)
-    fichas.value = []
-  }
+  await datos.recargar(COLECCION_FICHAS)
 }
 
 // El original llama a loadAutocompletionCatalog() al arrancar (linea 557).
@@ -212,16 +212,70 @@ const form = reactive({
 
 // #message
 const mensaje = ref('')
+
+// ---------------------------------------------------------------
+// Borrador automatico (formulario + filas) en localStorage
+// ---------------------------------------------------------------
+// El checklist es el formulario mas largo de la app: si se recarga la pagina a
+// mitad de la ficha no se debe perder nada. El borrador se elimina al guardar
+// o al limpiar el formulario, y caduca a los 7 dias (useBorrador).
+function instantaneaBorrador() {
+  return {
+    form: JSON.parse(JSON.stringify(form)),
+    grupos: grupos.value.map((g) => ({
+      key: g.key,
+      abierto: g.abierto,
+      filas: g.filas.map((f) => ({ ...f })),
+    })),
+  }
+}
+
+function aplicarBorrador(datosGuardados) {
+  if (datosGuardados.form) Object.assign(form, datosGuardados.form)
+  if (Array.isArray(datosGuardados.grupos)) {
+    grupos.value = datosGuardados.grupos.map((g) => {
+      const def = GRUPOS.find((x) => x.key === g.key)
+      return {
+        key: g.key,
+        name: def?.name || g.key,
+        icon: def?.icon || '',
+        items: def?.items || [],
+        abierto: g.abierto !== false,
+        // Se regeneran los id para que no choquen con los que cree contador.
+        filas: (g.filas || []).map((f) => ({ ...f, id: nuevoId() })),
+      }
+    })
+  }
+  form.serviciosRuta = (form.serviciosRuta || []).map((s) => ({ ...s, id: nuevoId() }))
+  form.movimientos = (form.movimientos || []).map((m) => ({ ...m, id: nuevoId() }))
+  if (!Array.isArray(form.precheck) || form.precheck.length !== PRECHECKS.length) {
+    form.precheck = PRECHECKS.map((_, i) => !!form.precheck?.[i])
+  }
+}
+
+const borrador = useBorrador({
+  clave: 'checklist-despacho',
+  fuente: [form, grupos],
+  obtener: instantaneaBorrador,
+  aplicar: aplicarBorrador,
+  alRestaurar: () => {
+    mensaje.value = 'Se recuperó el borrador que tenías sin guardar.'
+  },
+})
+
 // #search-property y #search-date
 const busqueda = reactive({ property: '', date: '' })
 // #history-list: null = aun sin consultar.
 const historial = ref(null)
 const historialCargando = ref(false)
 const historialError = ref('')
-// #template-type y las plantillas. El original las guardaba en localStorage; aqui
-// viven solo en memoria (el respaldo en localStorage se elimino en la migracion).
+// #template-type y las plantillas. El original las guardaba en localStorage con
+// la clave `checklist-template-<tipo>`; se conserva esa misma clave para no
+// perder las plantillas que Lina ya tenga guardadas.
 const plantillaTipo = ref('50')
-const plantillas = ref({})
+function llavePlantilla(tipo) {
+  return `checklist-template-${tipo}`
+}
 // Descarga del CSV (reemplaza a downloadFile(), linea 447).
 const urlDescarga = ref('')
 const nombreDescarga = ref('')
@@ -520,19 +574,34 @@ function duplicarChecklist() {
 
 // Listener de #save-template (linea 536). El original usaba localStorage.
 function guardarPlantilla() {
-  plantillas.value = { ...plantillas.value, [plantillaTipo.value]: snapshotFilas() }
-  mensaje.value = 'Plantilla guardada correctamente.'
+  try {
+    localStorage.setItem(llavePlantilla(plantillaTipo.value), JSON.stringify(snapshotFilas()))
+    mensaje.value = 'Plantilla guardada correctamente.'
+  } catch (e) {
+    console.error('No se pudo guardar la plantilla', e)
+    mensaje.value = 'No se pudo guardar la plantilla en este navegador.'
+  }
 }
 
 // Listener de #load-template (linea 537).
 function cargarPlantilla() {
-  const guardada = plantillas.value[plantillaTipo.value]
-  if (!guardada) {
+  let crudo
+  try {
+    crudo = localStorage.getItem(llavePlantilla(plantillaTipo.value))
+  } catch {
+    crudo = null
+  }
+  if (!crudo) {
     mensaje.value = 'No existe una plantilla guardada para este tipo de servicio.'
     return
   }
-  aplicarSnapshot(guardada)
-  mensaje.value = 'Plantilla cargada correctamente.'
+  try {
+    aplicarSnapshot(JSON.parse(crudo))
+    mensaje.value = 'Plantilla cargada correctamente.'
+  } catch (e) {
+    console.error('No se pudo cargar la plantilla', e)
+    mensaje.value = 'La plantilla guardada no se pudo leer.'
+  }
 }
 
 // Listener de #clear (linea 555): form.reset() + volver a los items por defecto.
@@ -555,6 +624,7 @@ function limpiarFicha() {
     g.filas = g.items.map((item) => nuevaFila(item))
   })
   mensaje.value = ''
+  borrador.limpiar()
 }
 
 // ---------------------------------------------------------------
@@ -637,6 +707,7 @@ async function guardarFicha() {
     await batch.commit()
 
     mensaje.value = `Checklist guardado correctamente. ID: ${id}`
+    borrador.limpiar()
     await buscarHistorial()
   } catch (error) {
     console.error(error)

@@ -5,7 +5,7 @@ import { useAuthStore } from '@/stores/auth'
 const auth = useAuthStore()
 
 const textoBoton = computed(() =>
-  auth.esAdmin ? 'Cerrar sesion admin' : 'Iniciar sesión como admin',
+  auth.usuario ? 'Cerrar sesión' : 'Iniciar sesión como admin',
 )
 </script>
 

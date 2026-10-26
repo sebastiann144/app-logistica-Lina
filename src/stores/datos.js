@@ -9,7 +9,7 @@
 // la unica fuente de verdad.)
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import { listar } from '@/services/firestore'
+import { listar, listarTodos } from '@/services/firestore'
 import { normalizarInventario } from '@/utils/inventario'
 
 export const COLECCIONES = [
@@ -26,7 +26,10 @@ export const COLECCIONES = [
   'equipos',
   'reservasEquipos',
   'inventario',
-  'checklistDespacho',
+  // La pantalla de Checklist de Despacho guarda aqui (checklistDespachoRutas).
+  // `checklistDespacho` era una lista vieja de index.html que quedo vacia y no
+  // la mostraba ningun elemento del DOM.
+  'checklistDespachoRutas',
 ]
 
 export const useDatosStore = defineStore('datos', () => {
@@ -43,9 +46,13 @@ export const useDatosStore = defineStore('datos', () => {
   const equipos = ref([])
   const reservasEquipos = ref([])
   const inventario = ref([])
-  const checklistDespacho = ref([])
+  const checklistDespachoRutas = ref([])
 
   const cargando = ref(false)
+  // true cuando termino al menos un intento de carga (con o sin error). Las
+  // vistas lo usan para distinguir "cargando" de "sin datos" y no mostrar
+  // estados vacios mientras Firestore responde.
+  const cargado = ref(false)
   const error = ref('')
 
   // Permite leer/escribir una coleccion por su nombre (como ESTADOS[nombre] del original).
@@ -63,11 +70,17 @@ export const useDatosStore = defineStore('datos', () => {
     equipos,
     reservasEquipos,
     inventario,
-    checklistDespacho,
+    checklistDespachoRutas,
   }
 
   function toma(nombre) {
     return refs[nombre] || null
+  }
+
+  // checklistDespachoRutas se lee sin orderBy: hay fichas sin createdAt ni
+  // serviceDate y orderBy las excluiria (y los contadores darian de menos).
+  function cargarColeccion(nombre) {
+    return nombre === 'checklistDespachoRutas' ? listarTodos(nombre) : listar(nombre)
   }
 
   function aplicar(nombre, arr) {
@@ -79,7 +92,7 @@ export const useDatosStore = defineStore('datos', () => {
   // Recarga una sola coleccion (se usa despues de crear/editar/eliminar).
   async function recargar(nombre) {
     try {
-      aplicar(nombre, await listar(nombre))
+      aplicar(nombre, await cargarColeccion(nombre))
     } catch (e) {
       console.warn(`No se pudo recargar ${nombre}`, e)
     }
@@ -92,17 +105,18 @@ export const useDatosStore = defineStore('datos', () => {
   async function cargarTodo() {
     cargando.value = true
     error.value = ''
-    const resultados = await Promise.allSettled(COLECCIONES.map((n) => listar(n)))
+    const resultados = await Promise.allSettled(COLECCIONES.map((n) => cargarColeccion(n)))
     resultados.forEach((res, i) => {
       const nombre = COLECCIONES[i]
       if (res.status === 'fulfilled') {
         aplicar(nombre, res.value)
       } else {
         console.warn(`No se pudo cargar la coleccion "${nombre}"`, res.reason)
-        error.value = 'Algunos datos no se pudieron cargar. Revisa la conexion.'
+        error.value = 'Algunos datos no se pudieron cargar. Revisa la conexión.'
       }
     })
     cargando.value = false
+    cargado.value = true
   }
 
   return {
@@ -119,8 +133,9 @@ export const useDatosStore = defineStore('datos', () => {
     equipos,
     reservasEquipos,
     inventario,
-    checklistDespacho,
+    checklistDespachoRutas,
     cargando,
+    cargado,
     error,
     toma,
     aplicar,
@@ -129,3 +144,4 @@ export const useDatosStore = defineStore('datos', () => {
     cargarTodo,
   }
 })
+

@@ -18,19 +18,25 @@ import BaseModal from '@/components/ui/BaseModal.vue'
 import { actualizar, crear, eliminar } from '@/services/firestore'
 import { useAuthStore } from '@/stores/auth'
 import { useDatosStore } from '@/stores/datos'
+import { useFiltroStore } from '@/stores/filtro'
+import { useBorrador } from '@/composables/useBorrador'
 import { ahora, hoy } from '@/utils/fechas'
 
 const auth = useAuthStore()
 const datos = useDatosStore()
+const filtro = useFiltroStore()
 
 // El original mostraba lo ultimo creado primero: [...arr].reverse()
-// (renderPrestamos linea 2360 y renderReservas linea 2498).
-const prestamos = computed(() => [...datos.prestamos].reverse())
-const reservas = computed(() => [...datos.reservas].reverse())
+// (renderPrestamos linea 2360 y renderReservas linea 2498). El filtro global
+// por vehiculo tambien aplica aqui, como hacia renderTodo() en index.html.
+const prestamos = computed(() => [...filtro.filtrar(datos.prestamos)].reverse())
+const reservas = computed(() => [...filtro.filtrar(datos.reservas)].reverse())
 
 // "En Uso Actualmente": solo los que siguen con estado 'En uso' (linea 2389).
 // El original no los invertia, los recorria en su orden natural.
-const prestamosActivos = computed(() => datos.prestamos.filter((p) => p.estado === 'En uso'))
+const prestamosActivos = computed(() =>
+  filtro.filtrar(datos.prestamos).filter((p) => p.estado === 'En uso'),
+)
 
 // Select de placas (llenarSelectVehiculos, linea 4159).
 const opcionesVehiculos = computed(() =>
@@ -72,6 +78,27 @@ const modalReserva = ref(false)
 const formPrestamo = ref({})
 const formReserva = ref({})
 
+// Borradores: si Lina recarga a mitad del formulario no pierde lo escrito.
+const borradorPrestamo = useBorrador({
+  clave: 'admin:prestamo-carro',
+  fuente: formPrestamo,
+  activo: () => modalPrestamo.value && !formPrestamo.value.id,
+  alRestaurar: () => {
+    modalPrestamo.value = true
+  },
+})
+const restauradoPrestamo = borradorPrestamo.restaurado
+
+const borradorReserva = useBorrador({
+  clave: 'admin:reserva-carro',
+  fuente: formReserva,
+  activo: () => modalReserva.value && !formReserva.value.id,
+  alRestaurar: () => {
+    modalReserva.value = true
+  },
+})
+const restauradoReserva = borradorReserva.restaurado
+
 // autoEstadoPrestamo (2411-2417): con fecha y hora de entrada queda 'Devuelto'.
 const estadoFormPrestamo = computed(() =>
   formPrestamo.value.fechaEntrada && formPrestamo.value.horaEntrada ? 'Devuelto' : 'En uso',
@@ -92,7 +119,8 @@ function abrirModalPrestamo(item) {
       }
     : {
         id: null,
-        vehiculo: '',
+        // Si hay un filtro global activo, se preselecciona esa placa.
+        vehiculo: filtro.vehiculo || '',
         solicitante: '',
         fechaSalida: hoy(),
         horaSalida: ahora(),
@@ -101,6 +129,7 @@ function abrirModalPrestamo(item) {
         obs: '',
       }
   modalPrestamo.value = true
+  if (!item) borradorPrestamo.reiniciar()
 }
 
 // abrirModalReserva (2528): item = reserva a editar, sin item = nueva.
@@ -113,8 +142,15 @@ function abrirModalReserva(item) {
         fecha: item.fecha || '',
         hora: item.hora || '',
       }
-    : { id: null, solicitante: '', vehiculo: '', fecha: hoy(), hora: ahora() }
+    : {
+        id: null,
+        solicitante: '',
+        vehiculo: filtro.vehiculo || '',
+        fecha: hoy(),
+        hora: ahora(),
+      }
   modalReserva.value = true
+  if (!item) borradorReserva.reiniciar()
 }
 
 // ---------------------------------------------------------------
@@ -136,6 +172,7 @@ async function guardarPrestamo() {
   else await crear('prestamos', obj)
   await datos.recargar('prestamos')
   modalPrestamo.value = false
+  borradorPrestamo.limpiar()
 }
 
 async function guardarReserva() {
@@ -161,6 +198,7 @@ async function guardarReserva() {
   else await crear('reservas', obj)
   await datos.recargar('reservas')
   modalReserva.value = false
+  borradorReserva.limpiar()
 }
 
 // ---------------------------------------------------------------
@@ -334,6 +372,9 @@ async function eliminarReserva(r) {
     <!-- ============ MODAL PRESTAMO (951-971) ============ -->
     <BaseModal :abierto="modalPrestamo" @cerrar="modalPrestamo = false">
       <h2>{{ formPrestamo.id ? 'Editar Prestamo' : 'Registrar Prestamo' }}</h2>
+      <p v-if="restauradoPrestamo" class="borrador-aviso">
+        Se recuperó el borrador que tenías sin guardar.
+      </p>
       <form @submit.prevent="guardarPrestamo">
         <div>
           <label>Vehiculo</label>
@@ -373,6 +414,9 @@ async function eliminarReserva(r) {
     <!-- ============ MODAL RESERVA (973-988) ============ -->
     <BaseModal :abierto="modalReserva" @cerrar="modalReserva = false">
       <h2>{{ formReserva.id ? 'Editar Reserva' : 'Registrar Reserva' }}</h2>
+      <p v-if="restauradoReserva" class="borrador-aviso">
+        Se recuperó el borrador que tenías sin guardar.
+      </p>
       <form @submit.prevent="guardarReserva">
         <div><label>Solicitante</label><input v-model="formReserva.solicitante" required /></div>
         <div>

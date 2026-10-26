@@ -4,14 +4,18 @@
 // Es la traduccion del tab #tabEquipos de index.html (lineas 691-699, que solo
 // contiene la tabla de prestamos) y de su modal:
 //  - modalEquipo (lineas 1031-1071): prestamos de equipos.
-// La caja de "Reservas Equipos" NO se incluye aqui porque en el original vivia en
-// el Muro Publico (muroReservasEquiposList, linea 736) y ya esta en MuroPublicoView.
+// Las reservas de equipos estaban solo en el Muro Publico (muroReservasEquiposList,
+// linea 736); ahora se muestran aqui con <ReservasEquiposPanel>, que tambien
+// permite reservar y confirmar sin cambiar de pestana.
 import { computed, ref } from 'vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import FirmaCanvas from '@/components/ui/FirmaCanvas.vue'
+import ReservasEquiposPanel from '@/components/equipos/ReservasEquiposPanel.vue'
 import { actualizar, crear, eliminar } from '@/services/firestore'
 import { useAuthStore } from '@/stores/auth'
 import { useDatosStore } from '@/stores/datos'
+import { useBorrador } from '@/composables/useBorrador'
+import { AREAS, etiquetaArea } from '@/utils/areas'
 import { hoy } from '@/utils/fechas'
 
 const auth = useAuthStore()
@@ -21,26 +25,22 @@ const datos = useDatosStore()
 // [...equipos].reverse().
 const equipos = computed(() => [...datos.equipos].reverse())
 
-// Opciones del select "Área" del modal (lineas 1038-1048).
-const AREAS = [
-  'Administracion',
-  'Asesorias',
-  'Talento Humano',
-  'Operaciones',
-  'Clase Aparte',
-  'Gerencia',
-  'Otros',
-]
-const ETIQUETA_AREA = {
-  Administracion: 'Administración',
-  Asesorias: 'Asesorías',
-}
-
 // ---------------------------------------------------------------
 // Modal (reemplaza cerrarModal('modalEquipo'))
 // ---------------------------------------------------------------
 const modalEquipo = ref(false)
 const formEquipo = ref({})
+
+// Borrador del formulario: si recarga a mitad de un prestamo no se pierde.
+const borradorEquipo = useBorrador({
+  clave: 'admin:prestamo-equipo',
+  fuente: formEquipo,
+  activo: () => modalEquipo.value && !formEquipo.value.id,
+  alRestaurar: () => {
+    modalEquipo.value = true
+  },
+})
+const restauradoEquipo = borradorEquipo.restaurado
 
 // abrirModalEquipo (linea 3139) / editarEquipo (linea 3202)
 function abrirModalEquipo(item) {
@@ -70,6 +70,7 @@ function abrirModalEquipo(item) {
         firma: '',
       }
   modalEquipo.value = true
+  if (!item) borradorEquipo.reiniciar()
 }
 
 // guardarEquipo (linea 3164)
@@ -90,6 +91,7 @@ async function guardarEquipo() {
   else await crear('equipos', obj)
   await datos.recargar('equipos')
   modalEquipo.value = false
+  borradorEquipo.limpiar()
 }
 
 // eliminarEquipo (linea 3203): solo admin.
@@ -107,6 +109,9 @@ function verFirma(dataUrl) {
 </script>
 
 <template>
+  <!-- Reservas de equipos (antes solo estaban en el Muro Publico) -->
+  <ReservasEquiposPanel />
+
   <div class="card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem">
       <h2 style="margin: 0">Prestamo de Equipos</h2>
@@ -135,7 +140,7 @@ function verFirma(dataUrl) {
           <tr v-for="e in equipos" :key="e.id">
             <td>{{ e.fechaSalida }}</td>
             <td>{{ e.entrega }}</td>
-            <td>{{ e.depto }}</td>
+            <td>{{ etiquetaArea(e.depto) }}</td>
             <td><strong>{{ e.equipo }}</strong></td>
             <td>{{ e.ref || '-' }}</td>
             <td>{{ e.cantidad }}</td>
@@ -166,6 +171,9 @@ function verFirma(dataUrl) {
   <!-- ============ MODAL EQUIPO ============ -->
   <BaseModal :abierto="modalEquipo" @cerrar="modalEquipo = false">
     <h2>{{ formEquipo.id ? 'Editar Prestamo Equipo' : 'Registrar Prestamo Equipo' }}</h2>
+    <p v-if="restauradoEquipo" class="borrador-aviso">
+      Se recuperó el borrador que tenías sin guardar.
+    </p>
     <form @submit.prevent="guardarEquipo">
       <div><label>Fecha Salida</label><input v-model="formEquipo.fechaSalida" type="date" required /></div>
       <div><label>Quien Entrega</label><input v-model="formEquipo.entrega" required /></div>
@@ -173,7 +181,7 @@ function verFirma(dataUrl) {
         <label>Área</label>
         <select v-model="formEquipo.depto" required>
           <option value="">Seleccione</option>
-          <option v-for="a in AREAS" :key="a" :value="a">{{ ETIQUETA_AREA[a] || a }}</option>
+          <option v-for="a in AREAS" :key="a" :value="a">{{ etiquetaArea(a) }}</option>
         </select>
       </div>
       <div><label>Equipo</label><input v-model="formEquipo.equipo" required /></div>

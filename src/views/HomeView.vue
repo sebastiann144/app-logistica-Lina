@@ -7,20 +7,35 @@
 //
 // Nota: renderStats() (3349) y renderAlertas() (3370) escriben en los elementos
 // del tab Vehiculos (#statVehiculos, #alertListVehiculos), no en Home; se
-// portaran en VehiculosView.vue. renderHome() no usa filtrarPorVehiculo().
+// portaron en VehiculosView.vue. El filtro global por vehiculo sí se aplica
+// aqui (es el mismo estado que usan Vehiculos y Prestamo Carros).
 import { computed } from 'vue'
 import { actualizar, crear } from '@/services/firestore'
 import { useAuthStore } from '@/stores/auth'
 import { useDatosStore } from '@/stores/datos'
+import { useFiltroStore } from '@/stores/filtro'
 import { diffDias, hoy } from '@/utils/fechas'
 
 const auth = useAuthStore()
 const datos = useDatosStore()
+const filtro = useFiltroStore()
 
 // renderHome() (linea 3498): reservas pendientes = estado !== 'Solicitado'.
 const reservasPendientes = computed(() =>
-  datos.reservas.filter((r) => r.estado !== 'Solicitado'),
+  filtro.filtrar(datos.reservas).filter((r) => r.estado !== 'Solicitado'),
 )
+
+// Resumen de la coleccion real de checklists (checklistDespachoRutas).
+const resumenDespacho = computed(() => {
+  const fichas = datos.checklistDespachoRutas || []
+  const mesActual = hoy().slice(0, 7)
+  const delMes = fichas.filter((f) => String(f.serviceDate || '').startsWith(mesActual)).length
+  const ultima =
+    [...fichas].sort((a, b) =>
+      String(b.serviceDate || '').localeCompare(String(a.serviceDate || '')),
+    )[0] || null
+  return { total: fichas.length, delMes, ultima }
+})
 
 // renderHome() (lineas 3520-3669) + addAlerta() (linea 3525).
 // Agrupa las alertas por categoria. El color de la tarjeta lo fija la PRIMERA
@@ -39,7 +54,7 @@ const categoriasAlertas = computed(() => {
   }
 
   // Mantenimientos (lineas 3534-3549)
-  datos.mantenimientos.forEach((m) => {
+  filtro.filtrar(datos.mantenimientos).forEach((m) => {
     if (m.proxFecha && new Date(m.proxFecha) <= hoyDate) {
       addAlerta(
         'Mantenimiento',
@@ -77,7 +92,7 @@ const categoriasAlertas = computed(() => {
   })
 
   // Revision gas (lineas 3551-3560)
-  datos.revisionGas.forEach((r) => {
+  filtro.filtrar(datos.revisionGas).forEach((r) => {
     if (new Date(r.vence) <= hoyDate) {
       addAlerta('Revisión Gas', '⛽', '#dc2626', `${r.vehiculo} vencida el ${r.vence}`, 'danger')
     } else {
@@ -95,7 +110,7 @@ const categoriasAlertas = computed(() => {
   })
 
   // Liquidos / revision aceite (lineas 3562-3571)
-  datos.liquidos.forEach((l) => {
+  filtro.filtrar(datos.liquidos).forEach((l) => {
     const bajos = ['aceite', 'refrigerante', 'frenos', 'direccion', 'limpia']
       .filter((f) => l[f] && l[f] !== 'OK')
       .map((f) => ({ f, v: l[f] }))
@@ -107,7 +122,8 @@ const categoriasAlertas = computed(() => {
   })
 
   // Prestamos de carros (lineas 3573-3581)
-  datos.prestamos
+  filtro
+    .filtrar(datos.prestamos)
     .filter((p) => p.estado === 'En uso')
     .forEach((p) => {
       const salida = new Date(p.fechaSalida + 'T' + (p.horaSalida || '00:00'))
@@ -132,7 +148,7 @@ const categoriasAlertas = computed(() => {
     })
 
   // Pico y placa (lineas 3583-3592)
-  datos.permisos.forEach((p) => {
+  filtro.filtrar(datos.permisos).forEach((p) => {
     if (new Date(p.fin) <= hoyDate) {
       addAlerta(
         'Pico y Placa',
@@ -179,7 +195,7 @@ const categoriasAlertas = computed(() => {
   })
 
   // SOAT (lineas 3602-3613)
-  datos.soat.forEach((s) => {
+  filtro.filtrar(datos.soat).forEach((s) => {
     const vence = new Date(s.vence)
     const ahoraDate = new Date()
     if (vence < ahoraDate) {
@@ -199,7 +215,7 @@ const categoriasAlertas = computed(() => {
   })
 
   // Kilometraje (lineas 3615-3637): solo el ultimo registro por vehiculo.
-  datos.kilometraje.forEach((k) => {
+  filtro.filtrar(datos.kilometraje).forEach((k) => {
     const v = datos.vehiculos.find((x) => x.placa === k.vehiculo)
     if (!v) return
     const regs = datos.kilometraje
@@ -246,6 +262,20 @@ const categoriasAlertas = computed(() => {
           'warning',
         )
       }
+    }
+  })
+
+  // Checklist de Despacho (checklistDespachoRutas): fichas que siguen en
+  // "Preparando" y ya pasó su fecha de servicio. La placa va en `vehicle`.
+  filtro.filtrar(datos.checklistDespachoRutas, 'vehicle').forEach((f) => {
+    if (f.serviceStatus === 'Preparando' && f.serviceDate && f.serviceDate < hoy()) {
+      addAlerta(
+        'Checklist Despacho',
+        '📋',
+        '#f59e0b',
+        `${f.property || 'Sin copropiedad'} — checklist del ${f.serviceDate} sigue en preparación`,
+        'warning',
+      )
     }
   })
 
@@ -340,6 +370,46 @@ async function confirmarReserva(r) {
         >
           ✓ Confirmar
         </button>
+      </div>
+    </div>
+
+    <!-- Checklist de Despacho (coleccion real: checklistDespachoRutas) -->
+    <div class="card" style="border-left: 4px solid #0f3460">
+      <div
+        style="
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 0.75rem;
+          flex-wrap: wrap;
+          gap: 0.5rem;
+        "
+      >
+        <div style="display: flex; align-items: center; gap: 0.5rem">
+          <span style="font-size: 1.1rem">📋</span>
+          <h2 style="margin: 0; font-size: 1rem">Checklist de Despacho</h2>
+        </div>
+        <RouterLink to="/checklist-despacho" class="btn btn-sm btn-outline">
+          Ver fichas
+        </RouterLink>
+      </div>
+      <div style="display: flex; gap: 1.75rem; flex-wrap: wrap; align-items: baseline; font-size: 0.85rem">
+        <div>
+          <strong style="font-size: 1.25rem; color: #0f3460">{{ resumenDespacho.total }}</strong>
+          <span style="color: #6b7280"> fichas</span>
+        </div>
+        <div>
+          <strong style="font-size: 1.25rem; color: #0f3460">{{ resumenDespacho.delMes }}</strong>
+          <span style="color: #6b7280"> este mes</span>
+        </div>
+        <div v-if="resumenDespacho.ultima">
+          Última:
+          <strong>{{ resumenDespacho.ultima.property || 'Sin copropiedad' }}</strong>
+          <span style="color: #6b7280">
+            · {{ resumenDespacho.ultima.serviceDate || 'sin fecha' }}
+          </span>
+        </div>
+        <div v-else style="color: #6b7280">Todavía no hay fichas registradas</div>
       </div>
     </div>
 
