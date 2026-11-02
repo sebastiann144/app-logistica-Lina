@@ -16,7 +16,17 @@ import { computed, ref } from 'vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import { actualizar, crear, eliminar } from '@/services/firestore'
 import { useDatosStore } from '@/stores/datos'
-import { INV_TIPOS, invRef, invTipoIcono } from '@/utils/inventario'
+import {
+  INV_TIPOS,
+  esSinAsignar,
+  invAsignaciones,
+  invEsComun,
+  invEstaAsignado,
+  invRef,
+  invTipoIcono,
+  invUnidades,
+  invUnidadesAsignadas,
+} from '@/utils/inventario'
 
 const datos = useDatosStore()
 
@@ -27,38 +37,7 @@ const inventario = computed(() => datos.inventario)
 // Helpers de clasificacion (index.html 3731-3751 y 3967-3980)
 // ---------------------------------------------------------------
 
-// invAsignaciones (3967)
-function invAsignaciones(e) {
-  if (Array.isArray(e.asignaciones) && e.asignaciones.length) {
-    return e.asignaciones
-  }
-  const lista = []
-  if (e.asignadoA || e.ubicacion) {
-    lista.push({ nombre: e.asignadoA || '', ubicacion: e.ubicacion || '' })
-  }
-  return lista
-}
-
-// invEstaAsignado (3978)
-function invEstaAsignado(e) {
-  return invAsignaciones(e).some((a) => a.nombre || a.ubicacion)
-}
-
-// invEsComun (3731)
-function invEsComun(e) {
-  if (e.controlTipo) return e.controlTipo === 'comun'
-  if (e.requiereAsignacion !== undefined) return !e.requiereAsignacion
-  if (invAsignaciones(e).some((a) => a.nombre)) return false
-  return ['Silla', 'Escritorio'].includes(e.tipo)
-}
-
-// invUnidades (3738) / invUnidadesAsignadas (3739) / invSituacion (3740)
-function invUnidades(e) {
-  return Math.max(1, parseInt(e.existencias) || 1)
-}
-function invUnidadesAsignadas(e) {
-  return invEstaAsignado(e) ? invUnidades(e) : 0
-}
+// invSituacion (3740)
 function invSituacion(e) {
   if (invEsComun(e)) return 'Uso común'
   return invEstaAsignado(e) ? 'Asignado' : 'Disponible'
@@ -77,11 +56,31 @@ function invEstadoGarantia(fechaGarantia) {
 }
 
 // Texto de una asignacion tal como lo armaba el renderInventario (3871-3876).
+// Los nombres "Sin asignacion" de los datos viejos no se muestran como persona.
 function textoAsignacion(a) {
   const partes = []
-  if (a.nombre) partes.push('👤 ' + a.nombre)
+  if (a.nombre && !esSinAsignar(a.nombre)) partes.push('👤 ' + a.nombre)
   if (a.ubicacion) partes.push('📍 ' + a.ubicacion)
   return partes.join(' · ') || '—'
+}
+
+// Asignaciones que vale la pena mostrar en la tabla: nombre real o ubicacion.
+function asignacionesVisibles(e) {
+  return invAsignaciones(e).filter((a) => (a.nombre && !esSinAsignar(a.nombre)) || a.ubicacion)
+}
+
+// Resumen de un equipo comun: cuantos registros y cuantas unidades abarca.
+function resumenComun(e) {
+  const registros = asignacionesVisibles(e).length
+  const unidades = invUnidades(e)
+  return `${registros} ${registros === 1 ? 'registro' : 'registros'} · ${unidades} ${
+    unidades === 1 ? 'unidad' : 'unidades'
+  }`
+}
+
+// Ubicacion de respaldo para equipos comunes sin filas visibles.
+function ubicacionComun(e) {
+  return invAsignaciones(e).find((a) => a.ubicacion)?.ubicacion || e.ubicacion || ''
 }
 
 // invRefs (3753): una entrada por referencia distinta.
@@ -192,7 +191,7 @@ const grupos = computed(() => {
       titulo: esAsignable ? 'Activos asignables' : 'Elementos de uso común',
       subtitulo: esAsignable
         ? 'Equipos que pueden estar bajo responsabilidad de un empleado'
-        : 'Elementos compartidos controlados por cantidad y ubicación',
+        : 'Elementos compartidos controlados por cantidad, ubicación y responsables',
       colorTitulo: esAsignable ? '#1e40af' : '#166534',
       bannerStyle: {
         margin: '1.25rem 0 .65rem',
@@ -282,7 +281,7 @@ function abrirModalInv(e, refKey) {
       marca: e.marca || '',
       serie: e.serie || '',
       estado: e.estado || '',
-      controlTipo: invEsComun(e) ? 'comun' : 'asignable',
+      controlTipo: e.controlTipo || '',
       fechaCompra: e.fechaCompra || '',
       valor: e.valor || '',
       proveedor: e.proveedor || '',
@@ -302,7 +301,7 @@ function abrirModalInv(e, refKey) {
       marca: '',
       serie: '',
       estado: '',
-      controlTipo: 'asignable',
+      controlTipo: '',
       fechaCompra: '',
       valor: '',
       proveedor: '',
@@ -388,7 +387,7 @@ async function guardarInv() {
     marca: f.marca,
     serie: f.serie,
     estado: f.estado,
-    controlTipo: f.controlTipo || 'asignable',
+    controlTipo: f.controlTipo || null,
     fechaCompra: f.fechaCompra || null,
     valor: f.valor,
     proveedor: f.proveedor,
@@ -631,7 +630,7 @@ function exportarReporteInv() {
                   <th>Marca</th>
                   <th style="width: 60px" class="td-center">Cantidad</th>
                   <th>Estado</th>
-                  <th>{{ grupo.esAsignable ? 'Situación / responsable' : 'Ubicación / control' }}</th>
+                  <th>{{ grupo.esAsignable ? 'Situación / responsable' : 'Ubicación / responsables' }}</th>
                   <th style="text-align: right">Valor Und.</th>
                   <th style="text-align: right">Acciones</th>
                 </tr>
@@ -677,17 +676,37 @@ function exportarReporteInv() {
                     <!-- Situación / responsable (3868-3879) -->
                     <template v-if="!grupo.esAsignable">
                       <span style="color: #166534; font-size: 0.7rem">🏢 {{ invSituacion(e) }}</span>
-                      <div v-if="e.ubicacion" style="font-size: 0.7rem; color: #64748b">
-                        📍 {{ e.ubicacion }}
+                      <template v-if="asignacionesVisibles(e).length">
+                        <div
+                          v-for="(a, i) in asignacionesVisibles(e)"
+                          :key="i"
+                          style="font-size: 0.7rem; line-height: 1.4; color: #334155"
+                        >
+                          {{ textoAsignacion(a) }}
+                        </div>
+                        <div style="font-size: 0.65rem; color: #94a3b8">{{ resumenComun(e) }}</div>
+                      </template>
+                      <div
+                        v-else-if="ubicacionComun(e)"
+                        style="font-size: 0.7rem; color: #64748b"
+                      >
+                        📍 {{ ubicacionComun(e) }}
                       </div>
+                      <div v-else style="font-size: 0.7rem; color: #94a3b8">Sin asignaciones</div>
                     </template>
                     <template v-else-if="invAsignaciones(e).length">
                       <div
                         v-for="(a, i) in invAsignaciones(e)"
                         :key="i"
-                        style="white-space: nowrap; font-size: 0.7rem; line-height: 1.4"
+                        style="font-size: 0.7rem; line-height: 1.4"
                       >
                         {{ textoAsignacion(a) }}
+                      </div>
+                      <div
+                        v-if="!invEstaAsignado(e)"
+                        style="font-size: 0.65rem; color: #2563eb"
+                      >
+                        ✅ Disponible
                       </div>
                     </template>
                     <template v-else>
@@ -802,12 +821,13 @@ function exportarReporteInv() {
         >
           <label style="font-size: 0.8rem; font-weight: 600; color: #0f3460">Forma de control</label>
           <select v-model="form.controlTipo" style="margin-top: 0.25rem">
+            <option value="">Automático (según el tipo)</option>
             <option value="asignable">Activo individual asignable</option>
             <option value="comun">Elemento de uso común</option>
           </select>
           <small style="display: block; color: #64748b; font-size: 0.7rem; margin-top: 0.25rem">
-            Los activos asignables pueden tener empleado responsable. Los elementos comunes se
-            controlan por cantidad y ubicación.
+            Automático: Escritorio, Otros e Impresora se controlan como uso común; Silla solo si
+            no tiene responsable. También puedes forzar la forma de control.
           </small>
         </div>
 

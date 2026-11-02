@@ -13,11 +13,13 @@
 // Aqui se lee de datos.inventario y se refresca con datos.recargar('inventario')
 // despues de cada escritura para que otras vistas tambien lo vean al dia.
 import { computed, onMounted, ref, watch } from 'vue'
+import AccesoriosSelect from '@/components/equipos/AccesoriosSelect.vue'
 import BaseModal from '@/components/ui/BaseModal.vue'
 import { collection, crear, db, doc, listar, writeBatch } from '@/services/firestore'
 import { useAuthStore } from '@/stores/auth'
 import { useDatosStore } from '@/stores/datos'
 import { hoy } from '@/utils/fechas'
+import { esSinAsignar, invEsComun, invEstaAsignado } from '@/utils/inventario'
 
 const auth = useAuthStore()
 const datos = useDatosStore()
@@ -38,6 +40,7 @@ const inventario = computed(() => datos.inventario)
 const cargando = ref(true)
 const vistaActual = ref('resumen') // asigVistaActual (linea 4188)
 const busqueda = ref('') // input #asigBusqueda (linea 754)
+const filtroEstado = ref('Todos')
 
 // ---------------------------------------------------------------
 // Helpers (lineas 4189-4194)
@@ -79,6 +82,7 @@ function equipoInventario(legacy) {
 
 // asigEstado (lineas 4206-4212): estado visible del equipo del inventario.
 function estado(e) {
+  if (invEsComun(e)) return 'Uso común'
   if (e.asignacionActivaId || e.estadoGestion === 'Asignado') return 'Asignado'
   if (
     asignaciones.value.some(
@@ -88,6 +92,7 @@ function estado(e) {
     return 'Asignado'
   const old = legado.value.find((x) => legadoActivo(x) && equipoInventario(x)?.id === e.id)
   if (!e.estadoGestion && old) return 'Asignado'
+  if (!e.estadoGestion && invEstaAsignado(e)) return 'Asignado'
   return e.estadoGestion || 'Disponible'
 }
 
@@ -99,7 +104,37 @@ function claseEstado(s) {
       ? 'badge-yellow'
       : s === 'Dañado'
         ? 'badge-red'
-        : 'badge-green'
+        : s === 'Uso común'
+          ? 'badge-gray'
+          : 'badge-green'
+}
+
+// Devoluciones registradas, indexadas por equipo y por codigo/serial.
+const devolucionesIndex = computed(() => {
+  const ids = new Set()
+  const claves = new Set()
+  devoluciones.value.forEach((d) => {
+    if (d.equipoId) ids.add(d.equipoId)
+    if (d.codigo) claves.add(clave(d.codigo))
+  })
+  return { ids, claves }
+})
+
+function tieneDevolucion(e) {
+  const idx = devolucionesIndex.value
+  return (
+    idx.ids.has(e.id) ||
+    idx.claves.has(clave(codigoDe(e))) ||
+    (e.serie && idx.claves.has(clave(e.serie)))
+  )
+}
+
+// Un equipo con devolucion registrada que hoy esta disponible se muestra como
+// "Devuelto" para diferenciarlo de los que nunca se asignaron.
+function estadoVisible(e) {
+  const s = estado(e)
+  if (s === 'Disponible' && tieneDevolucion(e)) return 'Devuelto'
+  return s
 }
 
 // ---------------------------------------------------------------
@@ -146,12 +181,20 @@ onMounted(async () => {
 // ---------------------------------------------------------------
 // Estadisticas y listas (asigRender y asigRender*, lineas 4224-4238)
 // ---------------------------------------------------------------
+const asignables = computed(() => inventario.value.filter((e) => !invEsComun(e)))
+const equiposComunes = computed(() => inventario.value.filter((e) => invEsComun(e)))
+
 const stats = computed(() => {
-  const asignados = inventario.value.filter((e) => estado(e) === 'Asignado').length
+  const lista = asignables.value
+  const asignados = lista.filter((e) => estadoVisible(e) === 'Asignado').length
+  const disponibles = lista.filter((e) => estadoVisible(e) === 'Disponible').length
+  const devueltos = lista.filter((e) => estadoVisible(e) === 'Devuelto').length
   return {
-    equipos: inventario.value.length,
-    disponibles: inventario.value.length - asignados,
+    equipos: lista.length,
+    disponibles,
     asignados,
+    devueltos,
+    comunes: equiposComunes.value.length,
     personas: personas.value.length,
   }
 })
@@ -164,30 +207,69 @@ function panel(vista) {
 // asigRender: filas del resumen "Estado actual del inventario".
 const filasResumen = computed(() => {
   const q = busqueda.value.toLowerCase()
-  return inventario.value.filter((e) =>
-    [codigoDe(e), nombreEquipo(e), e.serie, e.asignadoA].join(' ').toLowerCase().includes(q),
-  )
+  return asignables.value
+    .filter((e) =>
+      [codigoDe(e), nombreEquipo(e), e.serie, e.asignadoA].join(' ').toLowerCase().includes(q),
+    )
+    .filter((e) => filtroEstado.value === 'Todos' || estadoVisible(e) === filtroEstado.value)
 })
 
 // asigRenderEquipos: filas de "Equipos del inventario".
 const filasEquipos = computed(() => {
   const q = busqueda.value.toLowerCase()
-  return inventario.value.filter((e) =>
-    [codigoDe(e), nombreEquipo(e), e.serie].join(' ').toLowerCase().includes(q),
-  )
+  return asignables.value
+    .filter((e) => [codigoDe(e), nombreEquipo(e), e.serie].join(' ').toLowerCase().includes(q))
+    .filter((e) => filtroEstado.value === 'Todos' || estadoVisible(e) === filtroEstado.value)
+})
+
+// asigRenderDevoluciones: historial de devoluciones registradas.
+const filasDevoluciones = computed(() => {
+  const q = busqueda.value.toLowerCase()
+  return [...devoluciones.value]
+    .filter((d) =>
+      [
+        d.codigo,
+        d.numInventario,
+        d.personaNombre,
+        d.personaDevuelve,
+        d.respNombre,
+        d.observaciones,
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(q),
+    )
+    .sort((a, b) =>
+      String(b.fechaDevolucion || b.devFecha || '').localeCompare(
+        String(a.fechaDevolucion || a.devFecha || ''),
+      ),
+    )
 })
 
 // asigRenderHistorial: historial completo (asignaciones + registros legacy),
 // lo mas reciente primero.
 const filasHistorial = computed(() => {
-  const antiguos = legado.value.map((e) => ({
-    fecha: e.entFecha || '-',
-    mov: 'Asignación anterior',
-    codigo: e.numInventario || e.codigo || '-',
-    persona: e.respNombre || e.entRecibido || '-',
-  }))
+  const antiguos = legado.value.flatMap((e) => {
+    const filas = [
+      {
+        fecha: e.entFecha || '-',
+        mov: 'Asignación anterior',
+        codigo: e.numInventario || e.codigo || '-',
+        persona: e.respNombre || e.entRecibido || '-',
+      },
+    ]
+    if (e.devFecha) {
+      filas.push({
+        fecha: e.devFecha,
+        mov: 'Devolución',
+        codigo: e.numInventario || e.codigo || '-',
+        persona: e.respNombre || e.entRecibido || '-',
+      })
+    }
+    return filas
+  })
   const actuales = asignaciones.value.map((a) => ({
-    fecha: a.fechaEntrega || '-',
+    fecha: (a.estado === 'Activa' ? a.fechaEntrega : a.fechaDevolucion || a.fechaEntrega) || '-',
     mov: a.estado === 'Activa' ? 'Asignación' : 'Devolución',
     codigo: a.codigo || '-',
     persona: a.personaNombre || '-',
@@ -198,7 +280,10 @@ const filasHistorial = computed(() => {
 // Columna "Asignado a" del resumen.
 function nombreAsignado(e) {
   const a = asignaciones.value.find((x) => x.id === e.asignacionActivaId)
-  return a?.personaNombre || e.asignadoA || '-'
+  if (a?.personaNombre) return a.personaNombre
+  if (e.asignadoA && !esSinAsignar(e.asignadoA)) return e.asignadoA
+  const directa = (e.asignaciones || []).find((x) => x.nombre && !esSinAsignar(x.nombre))
+  return directa?.nombre || '-'
 }
 
 // Columna "Equipos" de la lista de personas.
@@ -236,7 +321,9 @@ function mostrarHistorial(e) {
 // Selects de los modales (asigRellenarSelects, linea 4240)
 // ---------------------------------------------------------------
 const opcionesPersonas = computed(() => personas.value.filter((p) => p.estado !== 'Inactivo'))
-const opcionesEquipos = computed(() => inventario.value.filter((e) => estado(e) === 'Disponible'))
+const opcionesEquipos = computed(() =>
+  inventario.value.filter((e) => !invEsComun(e) && estado(e) === 'Disponible'),
+)
 const opcionesDevolucion = computed(() => {
   const activas = asignaciones.value.filter((a) => a.estado === 'Activa' && a.origen !== 'equiposOficina')
   const antiguas = legado.value.filter(legadoActivo)
@@ -352,8 +439,10 @@ const infoDevolucion = computed(() => {
 watch(infoDevolucion, (info) => {
   if (info?.tipo === 'legacy') {
     formDevolucion.value.personaDevuelve = info.obj.respNombre || info.obj.entRecibido || ''
+    formDevolucion.value.accesorios = info.obj.entAccesorios || ''
   } else if (info?.tipo === 'nueva') {
     formDevolucion.value.personaDevuelve = info.obj.personaNombre || ''
+    formDevolucion.value.accesorios = info.obj.accesorios || ''
   }
 })
 
@@ -391,6 +480,8 @@ async function guardarAsignacion() {
   const e = inventario.value.find((x) => x.id === f.equipo)
   const p = personas.value.find((x) => x.id === f.persona)
   if (!e || !p) return alert('Seleccione persona y equipo.')
+  if (invEsComun(e))
+    return alert('Este equipo es de uso común y no se puede asignar individualmente.')
   const data = {
     equipoId: e.id,
     codigo: codigoDe(e),
@@ -566,16 +657,32 @@ async function guardarDevolucion() {
         <div class="stat"><div class="num">{{ stats.equipos }}</div><div class="lbl">Equipos</div></div>
         <div class="stat"><div class="num">{{ stats.disponibles }}</div><div class="lbl">Disponibles</div></div>
         <div class="stat"><div class="num">{{ stats.asignados }}</div><div class="lbl">Asignados</div></div>
+        <div class="stat"><div class="num">{{ stats.devueltos }}</div><div class="lbl">Devueltos</div></div>
+        <div class="stat"><div class="num">{{ stats.comunes }}</div><div class="lbl">Uso común</div></div>
         <div class="stat"><div class="num">{{ stats.personas }}</div><div class="lbl">Personas</div></div>
       </div>
+      <p style="margin: -0.4rem 0 0.8rem; color: #64748b; font-size: 0.72rem">
+        Los equipos de uso común se administran desde Inventario y no se asignan individualmente.
+      </p>
 
       <!-- Buscador y botones de panel (linea 754) -->
       <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.8rem">
         <input v-model="busqueda" placeholder="Buscar código, serial, equipo o persona" style="flex: 1; min-width: 220px" />
+        <select
+          v-if="vistaActual === 'resumen' || vistaActual === 'equipos'"
+          v-model="filtroEstado"
+          style="max-width: 150px"
+        >
+          <option>Todos</option>
+          <option>Disponible</option>
+          <option>Asignado</option>
+          <option>Devuelto</option>
+        </select>
         <button class="btn btn-outline btn-sm" @click="panel('resumen')">Resumen</button>
         <button class="btn btn-outline btn-sm" @click="panel('personas')">Personas</button>
         <button class="btn btn-outline btn-sm" @click="panel('equipos')">Equipos</button>
         <button class="btn btn-outline btn-sm" @click="panel('historial')">Historial</button>
+        <button class="btn btn-outline btn-sm" @click="panel('devoluciones')">Devoluciones</button>
       </div>
 
       <!-- Contenido: #asigContenido (asigRender, lineas 4229-4238) -->
@@ -615,7 +722,11 @@ async function guardarDevolucion() {
                   <td>{{ e.tipo || '-' }}</td>
                   <td>{{ [e.marca, e.modelo].filter(Boolean).join(' ') || '-' }}</td>
                   <td>{{ e.serie || '-' }}</td>
-                  <td>{{ estado(e) }}</td>
+                  <td>
+                    <span class="badge" :class="claseEstado(estadoVisible(e))">
+                      {{ estadoVisible(e) }}
+                    </span>
+                  </td>
                   <td><button class="btn btn-outline btn-sm" @click="mostrarHistorial(e)">Historial</button></td>
                 </tr>
               </tbody>
@@ -643,6 +754,61 @@ async function guardarDevolucion() {
           </div>
         </template>
 
+        <!-- asigRenderDevoluciones -->
+        <template v-else-if="vistaActual === 'devoluciones'">
+          <h3 style="color: #0f3460; font-size: 1rem">Equipos devueltos</h3>
+          <div v-if="!filasDevoluciones.length" class="empty">
+            {{
+              devoluciones.length
+                ? 'No hay devoluciones que coincidan con la búsqueda.'
+                : 'No hay devoluciones registradas.'
+            }}
+          </div>
+          <div v-else class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Código</th>
+                  <th>Persona</th>
+                  <th>Estado posterior</th>
+                  <th>Accesorios</th>
+                  <th>Recibió</th>
+                  <th>Observaciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="d in filasDevoluciones" :key="d.id">
+                  <td>{{ d.fechaDevolucion || d.devFecha || '-' }}</td>
+                  <td>{{ d.codigo || d.numInventario || '-' }}</td>
+                  <td>
+                    {{
+                      d.personaNombre ||
+                      d.personaDevuelve ||
+                      d.respNombre ||
+                      d.entRecibido ||
+                      '-'
+                    }}
+                  </td>
+                  <td>
+                    <span
+                      v-if="d.estadoPosterior"
+                      class="badge"
+                      :class="claseEstado(d.estadoPosterior)"
+                    >
+                      {{ d.estadoPosterior }}
+                    </span>
+                    <span v-else>—</span>
+                  </td>
+                  <td>{{ d.accesoriosDevueltos || d.devAccesorios || '-' }}</td>
+                  <td>{{ d.personaRecibe || d.devRecibido || '-' }}</td>
+                  <td>{{ d.observaciones || d.devObs || '-' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
         <!-- asigRender, resumen (linea 4234) -->
         <template v-else>
           <h3 style="color: #0f3460; font-size: 1rem">Estado actual del inventario</h3>
@@ -656,7 +822,11 @@ async function guardarDevolucion() {
                   <td>{{ nombreEquipo(e) }}</td>
                   <td>{{ codigoDe(e) }}</td>
                   <td>{{ e.serie || '-' }}</td>
-                  <td><span class="badge" :class="claseEstado(estado(e))">{{ estado(e) }}</span></td>
+                  <td>
+                    <span class="badge" :class="claseEstado(estadoVisible(e))">
+                      {{ estadoVisible(e) }}
+                    </span>
+                  </td>
                   <td>{{ nombreAsignado(e) }}</td>
                   <td><button class="btn btn-outline btn-sm" @click="mostrarHistorial(e)">Ver historial</button></td>
                 </tr>
@@ -699,7 +869,10 @@ async function guardarDevolucion() {
             <option>Con novedades</option>
           </select>
         </div>
-        <div><label>Accesorios</label><input v-model="formAsignacion.accesorios" /></div>
+        <div>
+          <label>Accesorios</label>
+          <AccesoriosSelect v-model="formAsignacion.accesorios" />
+        </div>
         <div class="full">
           <!-- #asigEquipoInfo (asigMostrarEquipo, linea 4244) -->
           <div class="notice">
@@ -753,7 +926,10 @@ async function guardarDevolucion() {
             <option>Dañado</option>
           </select>
         </div>
-        <div class="full"><label>Accesorios devueltos</label><input v-model="formDevolucion.accesorios" /></div>
+        <div class="full">
+          <label>Accesorios devueltos</label>
+          <AccesoriosSelect v-model="formDevolucion.accesorios" />
+        </div>
         <div class="full"><label>Observaciones</label><textarea v-model="formDevolucion.observaciones" rows="2" /></div>
         <div class="full" style="display: flex; justify-content: flex-end; gap: 0.5rem">
           <button type="button" class="btn btn-outline" @click="modalDevolucion = false">Cancelar</button>
@@ -786,7 +962,7 @@ async function guardarDevolucion() {
         <div class="notice">
           <strong>{{ nombreEquipo(historialDetalle.e) }}</strong><br />
           Código: {{ codigoDe(historialDetalle.e) }} · Serial: {{ historialDetalle.e.serie || '-' }} · Estado:
-          {{ estado(historialDetalle.e) }}
+          {{ estadoVisible(historialDetalle.e) }}
         </div>
         <div class="table-wrap">
           <table>
