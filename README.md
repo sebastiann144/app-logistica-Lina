@@ -51,7 +51,8 @@ src/
 ```
 
 El detalle de la migración (equivalencias HTML→Vue, estado y pendientes) está en
-[`docs/migracion.md`](docs/migracion.md).
+[`docs/migracion.md`](docs/migracion.md). La guía de entrega y despliegue está en
+[`docs/entrega.md`](docs/entrega.md).
 
 ## Roles
 
