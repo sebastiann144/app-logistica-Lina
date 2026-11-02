@@ -23,6 +23,11 @@ export const useAuthStore = defineStore('auth', () => {
   const avisoReset = ref('')
 
   const email = computed(() => usuario.value?.email || '')
+  // La sesion anonima es la que usa el muro publico para poder leer Firestore.
+  // No es una cuenta real: la barra de sesion no debe ofrecer "Cerrar sesion"
+  // para ella, porque al cerrarla se vuelve a crear automaticamente.
+  const esAnonimo = computed(() => !!usuario.value?.isAnonymous)
+  const esCuentaReal = computed(() => !!usuario.value && !esAnonimo.value)
   const esAdmin = computed(() => email.value === ADMIN_EMAIL)
   const esEditorEquipos = computed(() => email.value === EDITOR_EQUIPOS_EMAIL)
   const esVisitanteMant = computed(() => email.value === VISITANTE_MANT_EMAIL)
@@ -34,6 +39,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   const etiquetaUsuario = computed(() => {
     if (!usuario.value) return 'No conectado'
+    if (esAnonimo.value) return 'Visitante'
     return usuario.value.email || 'Visitante'
   })
 
@@ -187,10 +193,10 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   // Comportamiento del boton de la barra de sesion:
-  // si hay cualquier cuenta abierta (admin, editor o mantenimiento) cierra
-  // sesion; si no, abre el modal de acceso.
+  // si hay una cuenta real (admin, editor o mantenimiento) cierra sesion; si
+  // solo esta la sesion anonima del muro publico, abre el modal de acceso.
   function alPresionarBotonSesion() {
-    if (usuario.value) {
+    if (esCuentaReal.value) {
       cerrarSesion()
       return
     }
@@ -206,6 +212,8 @@ export const useAuthStore = defineStore('auth', () => {
     errorLogin,
     avisoReset,
     email,
+    esAnonimo,
+    esCuentaReal,
     esAdmin,
     esEditorEquipos,
     esVisitanteMant,
