@@ -46,7 +46,7 @@ const router = createRouter({
       path: '/checklist-despacho',
       name: 'checklist-despacho',
       component: () => import('@/views/ChecklistDespachoView.vue'),
-      meta: { requiere: 'admin' },
+      meta: { requiere: 'checklist' },
     },
     {
       path: '/mant-equipos',

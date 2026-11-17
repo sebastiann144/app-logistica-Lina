@@ -30,6 +30,8 @@ export const COLECCIONES = [
   // `checklistDespacho` era una lista vieja de index.html que quedo vacia y no
   // la mostraba ningun elemento del DOM.
   'checklistDespachoRutas',
+  // Modelo nuevo de rutas con paradas y trazabilidad.
+  'checklistRutas',
 ]
 
 export const useDatosStore = defineStore('datos', () => {
@@ -47,6 +49,7 @@ export const useDatosStore = defineStore('datos', () => {
   const reservasEquipos = ref([])
   const inventario = ref([])
   const checklistDespachoRutas = ref([])
+  const checklistRutas = ref([])
 
   const cargando = ref(false)
   // true cuando termino al menos un intento de carga (con o sin error). Las
@@ -71,16 +74,19 @@ export const useDatosStore = defineStore('datos', () => {
     reservasEquipos,
     inventario,
     checklistDespachoRutas,
+    checklistRutas,
   }
 
   function toma(nombre) {
     return refs[nombre] || null
   }
 
-  // checklistDespachoRutas se lee sin orderBy: hay fichas sin createdAt ni
-  // serviceDate y orderBy las excluiria (y los contadores darian de menos).
+  // Estas colecciones no tienen `createdAt` en todos los documentos: orderBy
+  // los excluiria y los contadores saldrian mal.
   function cargarColeccion(nombre) {
-    return nombre === 'checklistDespachoRutas' ? listarTodos(nombre) : listar(nombre)
+    return ['checklistDespachoRutas', 'checklistRutas'].includes(nombre)
+      ? listarTodos(nombre)
+      : listar(nombre)
   }
 
   function aplicar(nombre, arr) {
@@ -134,6 +140,7 @@ export const useDatosStore = defineStore('datos', () => {
     reservasEquipos,
     inventario,
     checklistDespachoRutas,
+    checklistRutas,
     cargando,
     cargado,
     error,

@@ -26,7 +26,7 @@ export const ITEMS_MENU = [
     icono: '✅',
     etiqueta: 'Checklist Despacho',
     corto: 'Checklist',
-    requiere: 'admin',
+    requiere: 'checklist',
   },
   { to: '/muro-publico', icono: '🌐', etiqueta: 'Muro Publico', corto: 'Muro' },
   {

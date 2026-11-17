@@ -25,16 +25,15 @@ const reservasPendientes = computed(() =>
   filtro.filtrar(datos.reservas).filter((r) => r.estado !== 'Solicitado'),
 )
 
-// Resumen de la coleccion real de checklists (checklistDespachoRutas).
+// Resumen del modelo nuevo de checklists por ruta (checklistRutas).
+// Los registros viejos de checklistDespachoRutas ya no cuentan aqui.
 const resumenDespacho = computed(() => {
-  const fichas = datos.checklistDespachoRutas || []
+  const rutas = datos.checklistRutas || []
   const mesActual = hoy().slice(0, 7)
-  const delMes = fichas.filter((f) => String(f.serviceDate || '').startsWith(mesActual)).length
+  const delMes = rutas.filter((r) => String(r.fecha || '').startsWith(mesActual)).length
   const ultima =
-    [...fichas].sort((a, b) =>
-      String(b.serviceDate || '').localeCompare(String(a.serviceDate || '')),
-    )[0] || null
-  return { total: fichas.length, delMes, ultima }
+    [...rutas].sort((a, b) => String(b.fecha || '').localeCompare(String(a.fecha || '')))[0] || null
+  return { total: rutas.length, delMes, ultima }
 })
 
 // renderHome() (lineas 3520-3669) + addAlerta() (linea 3525).
@@ -265,15 +264,14 @@ const categoriasAlertas = computed(() => {
     }
   })
 
-  // Checklist de Despacho (checklistDespachoRutas): fichas que siguen en
-  // "Preparando" y ya pasó su fecha de servicio. La placa va en `vehicle`.
-  filtro.filtrar(datos.checklistDespachoRutas, 'vehicle').forEach((f) => {
-    if (f.serviceStatus === 'Preparando' && f.serviceDate && f.serviceDate < hoy()) {
+  // Checklist por ruta: rutas que siguen abiertas y ya pasó su fecha.
+  filtro.filtrar(datos.checklistRutas, 'vehiculo').forEach((r) => {
+    if (r.estado !== 'Cerrada' && r.fecha && r.fecha < hoy()) {
       addAlerta(
         'Checklist Despacho',
         '📋',
         '#f59e0b',
-        `${f.property || 'Sin copropiedad'} — checklist del ${f.serviceDate} sigue en preparación`,
+        `${r.vehiculo || 'Sin vehículo'} — ruta del ${r.fecha} sigue ${r.estado || 'abierta'}`,
         'warning',
       )
     }
@@ -396,7 +394,7 @@ async function confirmarReserva(r) {
       <div style="display: flex; gap: 1.75rem; flex-wrap: wrap; align-items: baseline; font-size: 0.85rem">
         <div>
           <strong style="font-size: 1.25rem; color: #0f3460">{{ resumenDespacho.total }}</strong>
-          <span style="color: #6b7280"> fichas</span>
+          <span style="color: #6b7280"> rutas</span>
         </div>
         <div>
           <strong style="font-size: 1.25rem; color: #0f3460">{{ resumenDespacho.delMes }}</strong>
@@ -404,12 +402,13 @@ async function confirmarReserva(r) {
         </div>
         <div v-if="resumenDespacho.ultima">
           Última:
-          <strong>{{ resumenDespacho.ultima.property || 'Sin copropiedad' }}</strong>
+          <strong>{{ resumenDespacho.ultima.vehiculo || 'Sin vehículo' }}</strong>
           <span style="color: #6b7280">
-            · {{ resumenDespacho.ultima.serviceDate || 'sin fecha' }}
+            · {{ resumenDespacho.ultima.fecha || 'sin fecha' }} ·
+            {{ resumenDespacho.ultima.tipoServicio || 'sin tipo' }}
           </span>
         </div>
-        <div v-else style="color: #6b7280">Todavía no hay fichas registradas</div>
+        <div v-else style="color: #6b7280">Todavía no hay rutas registradas</div>
       </div>
     </div>
 

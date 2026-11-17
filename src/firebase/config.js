@@ -22,3 +22,6 @@ export const EDITOR_EQUIPOS_EMAIL =
   env.VITE_EDITOR_EQUIPOS_EMAIL || 'gestionhumanaclasealpha@gmail.com'
 export const VISITANTE_MANT_EMAIL =
   env.VITE_VISITANTE_MANT_EMAIL || 'admonclasealphados@gmail.com'
+// El conductor diligencia las paradas; el Admin además cierra la ruta.
+// Se puede sobreescribir con VITE_CONDUCTOR_EMAIL si la cuenta real es otra.
+export const CONDUCTOR_EMAIL = env.VITE_CONDUCTOR_EMAIL || 'conductorclasealpha@gmail.com'
