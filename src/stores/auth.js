@@ -11,13 +11,7 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from 'firebase/auth'
-import {
-  ADMIN_EMAIL,
-  CONDUCTOR_EMAIL,
-  EDITOR_EQUIPOS_EMAIL,
-  VISITANTE_MANT_EMAIL,
-  auth,
-} from '@/firebase'
+import { ADMIN_EMAIL, EDITOR_EQUIPOS_EMAIL, VISITANTE_MANT_EMAIL, auth } from '@/firebase'
 
 export const useAuthStore = defineStore('auth', () => {
   const usuario = ref(null)
@@ -37,10 +31,6 @@ export const useAuthStore = defineStore('auth', () => {
   const esAdmin = computed(() => email.value === ADMIN_EMAIL)
   const esEditorEquipos = computed(() => email.value === EDITOR_EQUIPOS_EMAIL)
   const esVisitanteMant = computed(() => email.value === VISITANTE_MANT_EMAIL)
-  const esConductor = computed(() => !!CONDUCTOR_EMAIL && email.value === CONDUCTOR_EMAIL)
-  // El checklist lo puede diligenciar el Conductor; cerrar la ruta sigue siendo
-  // una accion exclusiva del Admin dentro de la propia vista.
-  const puedeManejarChecklist = computed(() => esAdmin.value || esConductor.value)
 
   // Permisos de navegacion (antes eran los items "admin-only" del menu).
   const puedeVerMantEquipos = computed(() => esAdmin.value || esVisitanteMant.value)
@@ -134,7 +124,6 @@ export const useAuthStore = defineStore('auth', () => {
   function puede(requiere) {
     if (!requiere) return true
     if (requiere === 'admin') return esAdmin.value
-    if (requiere === 'checklist') return puedeManejarChecklist.value
     if (requiere === 'mant') return puedeVerMantEquipos.value
     if (requiere === 'equipos') return puedeVerEquiposAsignados.value
     return false
@@ -228,8 +217,6 @@ export const useAuthStore = defineStore('auth', () => {
     esAdmin,
     esEditorEquipos,
     esVisitanteMant,
-    esConductor,
-    puedeManejarChecklist,
     puedeVerMantEquipos,
     puedeVerEquiposAsignados,
     puedeEditarEquipos,

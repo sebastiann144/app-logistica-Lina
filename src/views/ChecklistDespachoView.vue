@@ -1,20 +1,21 @@
 <script setup>
-// Checklist de Despacho - modelo de rutas con paradas y trazabilidad.
+// Checklist de Despacho - hoja fisica que acompaña la canasta.
 //
-// Cada ruta sale de la Empresa, pasa por 1 a N conjuntos residenciales y vuelve
-// a la Empresa. En cada parada se registran Enviado / Recibido / Devuelto y las
-// firmas de quien entrega y quien recibe. Los movimientos se escriben en una
-// coleccion plana para poder consultar despues por equipo, conjunto u operario.
+// Cada operario maneja un servicio diferente y es responsable de todo lo que
+// recibe, entrega y devuelve. La hoja sirve de guia entre operarios y
+// deja trazabilidad por referencia del elemento (sin codigos de equipos).
 //
-// El catalogo de equipos es unico y compartido por Sonido, Votacion y Grabacion:
-// el mismo Interfaz Behringer tiene un solo codigo y un solo historial.
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+// La ruta Empresa -> conjunto -> conjunto -> Empresa se vence 4 dias despues de
+// su fecha: se asume que el carro ya regreso y la siguiente hoja sale en blanco.
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import FirmaCanvas from '@/components/ui/FirmaCanvas.vue'
 import ItemsChecklist from '@/components/checklist/ItemsChecklist.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useBorrador } from '@/composables/useBorrador'
 import {
-  crearCatalogo,
+  catalogoBase,
+  estaVencida,
+  fechaVencimiento,
   filaDesdeCatalogo,
   itemsDePlantilla,
   nombreTipo,
@@ -23,9 +24,7 @@ import {
   totalFila,
 } from '@/utils/checklistPlantillas'
 import {
-  cargarCatalogo,
   fechaHoraLocal,
-  guardarCodigoCatalogo,
   guardarRuta,
   listarMovimientos,
   listarRutas,
@@ -33,6 +32,7 @@ import {
 } from '@/services/checklistFirestore'
 
 const auth = useAuthStore()
+const catalogo = catalogoBase()
 
 const CONTENIDO_RETANQUEO = {
   1: 'Paquete 1: 50 hojas de asistencia, 10 actas de entrega, 10 hojas de vida / Fichos: 10, bandas/ganchos/lapiceros',
@@ -41,7 +41,6 @@ const CONTENIDO_RETANQUEO = {
   4: 'Paquete 4: 50 hojas de asistencia, 10 actas de entrega, 10 hojas de vida / Fichos: 10, bandas/ganchos/lapiceros',
 }
 
-const catalogo = ref(crearCatalogo())
 const vista = ref('ruta')
 const cargandoDatos = ref(true)
 const guardando = ref(false)
@@ -65,29 +64,24 @@ const ruta = reactive(crearRutaVacia('sonido'))
 
 const plantilla = computed(() => PLANTILLAS[ruta.tipoServicio] || PLANTILLAS.sonido)
 const especiales = computed(() => plantilla.value.especiales || [])
-const catalogoById = computed(() => Object.fromEntries(catalogo.value.map((i) => [i.id, i])))
-const itemsPlantilla = computed(() => itemsDePlantilla(ruta.tipoServicio, catalogo.value))
+const itemsPlantilla = computed(() => itemsDePlantilla(ruta.tipoServicio, catalogo))
 
 const grupos = computed(() =>
   plantilla.value.grupos.map((g) => ({
     key: g.key,
     nombre: g.nombre,
     icono: g.icono,
-    items: g.items.map((id) => catalogoById.value[id]).filter(Boolean),
+    items: itemsPlantilla.value.filter((i) => i.grupo === g.nombre),
   })),
 )
 
+const numerosEquipo = [1, 2, 3, 4, 5, 6, 7, 8]
 const parada = computed(() => ruta.paradas[paradaActual.value] || null)
-const paradasAtendidas = computed(() =>
-  ruta.paradas.filter((p) => p.estado === 'Confirmada' || p.estado === 'En traslado').length,
+const rutaVencida = computed(() => estaVencida(ruta.fecha))
+const paradasAtendidas = computed(
+  () => ruta.paradas.filter((p) => p.estado === 'Confirmada' || p.estado === 'En traslado').length,
 )
 const rutaCerrada = computed(() => ruta.estado === 'Cerrada')
-
-const rolTexto = computed(() => {
-  if (auth.esAdmin) return 'Admin'
-  if (auth.esConductor) return 'Conductor'
-  return 'Sin permiso de checklist'
-})
 
 const rutasFiltradas = computed(() => {
   const texto = filtros.texto.trim().toLowerCase()
@@ -96,7 +90,9 @@ const rutasFiltradas = computed(() => {
     if (filtros.fecha && r.fecha !== filtros.fecha) return false
     if (
       texto &&
-      !`${r.vehiculo || ''} ${r.conductor || ''} ${nombreTipo(r.tipoServicio)} ${r.estado || ''}`
+      !`${nombreTipo(r.tipoServicio)} ${r.estado || ''} ${(r.paradas || [])
+        .map((p) => p.conjunto || '')
+        .join(' ')}`
         .toLowerCase()
         .includes(texto)
     )
@@ -113,7 +109,7 @@ const movimientosFiltrados = computed(() => {
   return movimientos.value.filter((m) => {
     if (
       equipo &&
-      !`${m.codigo || ''} ${m.referencia || ''} ${m.itemId || ''}`.toLowerCase().includes(equipo)
+      !`${m.referencia || ''} ${m.itemId || ''}`.toLowerCase().includes(equipo)
     )
       return false
     if (conjunto && !(m.conjunto || '').toLowerCase().includes(conjunto)) return false
@@ -128,26 +124,24 @@ const totalAlertas = computed(() => {
 })
 
 // ---------------------------------------------------------------
-// Construccion de la ruta
+// Construccion de la hoja
 // ---------------------------------------------------------------
 
 function crearRutaVacia(tipo = 'sonido') {
-  const p = PLANTILLAS[tipo] || PLANTILLAS.sonido
+  const fecha = new Date().toISOString().slice(0, 10)
   return {
     id: '',
-    fecha: new Date().toISOString().slice(0, 10),
-    vehiculo: '',
-    conductor: '',
+    fecha,
+    fechaVencimiento: fechaVencimiento(fecha),
     tipoServicio: tipo,
-    plantillaCodigo: p.codigo,
-    elaboracion: p.elaboracion,
     colorEquipo: '',
+    numeroEquipo: '',
     origen: 'Empresa',
     destinoFinal: 'Empresa',
     estado: 'Preparando',
     preparacion: {
-      empacadoPor: '',
-      items: itemsDePlantilla(tipo, crearCatalogo()).map((i) => filaDesdeCatalogo(i, 'empresa')),
+      operario: '',
+      items: itemsDePlantilla(tipo, catalogo).map((i) => filaDesdeCatalogo(i, 'empresa')),
     },
     paradas: [],
     traslados: [],
@@ -170,7 +164,7 @@ function crearRetanqueos() {
 }
 
 function nuevaFirma() {
-  return { nombre: '', hora: '', firma: '' }
+  return { nombre: '', hora: '', dibujo: '' }
 }
 
 function nuevoRespaldoAudio() {
@@ -193,17 +187,13 @@ function agregarParada() {
     id,
     orden: ruta.paradas.length + 1,
     conjunto: '',
-    direccion: '',
-    responsable: '',
+    operario: '',
     tipoServicio: ruta.tipoServicio,
-    plantillaCodigo: plantilla.value.codigo,
     horaLlegada: '',
     horaSalida: '',
     horaInicioAsamblea: '',
     horaFinAsamblea: '',
-    operariosAtencion: '',
-    entrega: nuevaFirma(),
-    recepcion: nuevaFirma(),
+    firma: nuevaFirma(),
     novedad: '',
     destino: 'otro_conjunto',
     estado: 'Pendiente',
@@ -214,7 +204,6 @@ function agregarParada() {
     confirmadaEn: '',
     confirmadaPor: '',
   })
-  // El traslado que quedaba pendiente ya tiene destino conocido.
   const pendiente = [...ruta.traslados].reverse().find((t) => !t.hacia || t.hacia === '(pendiente)')
   if (pendiente) pendiente.hacia = ''
   sincronizarEnviados()
@@ -233,31 +222,30 @@ function eliminarParada(id) {
 }
 
 function cambiarTipo() {
-  const p = PLANTILLAS[ruta.tipoServicio] || PLANTILLAS.sonido
-  ruta.plantillaCodigo = p.codigo
-  ruta.elaboracion = p.elaboracion
-  ruta.preparacion.items = itemsDePlantilla(ruta.tipoServicio, catalogo.value).map((i) =>
+  ruta.colorEquipo = ''
+  ruta.numeroEquipo = ''
+  ruta.preparacion.items = itemsDePlantilla(ruta.tipoServicio, catalogo).map((i) =>
     filaDesdeCatalogo(i, 'empresa'),
   )
-  ruta.paradas.forEach((p2) => {
-    p2.tipoServicio = ruta.tipoServicio
-    p2.plantillaCodigo = p.codigo
-    p2.items = itemsDePlantilla(ruta.tipoServicio, catalogo.value).map((i) =>
+  ruta.paradas.forEach((p) => {
+    p.tipoServicio = ruta.tipoServicio
+    p.items = itemsDePlantilla(ruta.tipoServicio, catalogo).map((i) =>
       filaDesdeCatalogo(i, 'parada'),
     )
-    p2.respaldoAudio = nuevoRespaldoAudio()
-    p2.respaldoPlataforma = { subido: false, detalles: '', observaciones: '' }
+    p.respaldoAudio = nuevoRespaldoAudio()
+    p.respaldoPlataforma = { subido: false, detalles: '', observaciones: '' }
+    p.retanqueos = crearRetanqueos()
   })
   sincronizarEnviados()
-  mensaje.value = `Plantilla cambiada a ${nombreTipo(ruta.tipoServicio)}.`
+  mensaje.value = `Hoja cambiada a ${nombreTipo(ruta.tipoServicio)}.`
 }
 
 function sincronizarEnviados() {
   const base = ruta.preparacion.items
-  ruta.paradas.forEach((paradaItem, i) => {
+  ruta.paradas.forEach((p, i) => {
     const origen = i === 0 ? base : ruta.paradas[i - 1].items
     const mapa = Object.fromEntries(origen.map((f) => [f.itemId, f]))
-    paradaItem.items.forEach((f) => {
+    p.items.forEach((f) => {
       const previo = mapa[f.itemId]
       if (!previo) return
       if (f.enviado === '' || f.enviado === null || f.enviado === undefined) {
@@ -272,29 +260,23 @@ function sincronizarEnviados() {
 }
 
 function reiniciarRuta() {
+  const tipo = ruta.tipoServicio || 'sonido'
   Object.keys(ruta).forEach((k) => delete ruta[k])
-  Object.assign(ruta, crearRutaVacia(ruta.tipoServicio || 'sonido'))
+  Object.assign(ruta, crearRutaVacia(tipo))
   rutaId.value = ''
   paradaActual.value = 0
   vista.value = 'ruta'
-  mensaje.value = 'Ruta lista para diligenciar.'
+  mensaje.value = 'Hoja limpia. Lista para empezar.'
   error.value = ''
   borrador.reiniciar()
 }
 
-function aplicarCodigosCatalogo() {
-  const porId = Object.fromEntries(catalogo.value.map((i) => [i.id, i]))
-  const aplicar = (fila) => {
-    const def = porId[fila.itemId]
-    if (!def) return
-    fila.codigo = def.codigo
-    fila.referencia = def.referencia
-    fila.esConsumible = !!def.consumible
-    fila.dosCantidades = !!def.dosCantidades
-  }
-  ruta.preparacion.items.forEach(aplicar)
-  ruta.paradas.forEach((p) => p.items.forEach(aplicar))
-}
+watch(
+  () => ruta.fecha,
+  (fecha) => {
+    ruta.fechaVencimiento = fechaVencimiento(fecha)
+  },
+)
 
 // ---------------------------------------------------------------
 // Reglas de control
@@ -340,11 +322,15 @@ function alertasParada(p) {
   const lista = p.items.flatMap(alertasDeFila)
 
   if (!String(p.conjunto || '').trim())
-    lista.push({ bloquea: true, tipo: 'firma', texto: 'Escribe el nombre del conjunto residencial.' })
-  if (!p.entrega.nombre || !p.entrega.hora || !p.entrega.firma)
-    lista.push({ bloquea: true, tipo: 'firma', texto: 'Falta nombre, hora o firma de quien entrega.' })
-  if (!p.recepcion.nombre || !p.recepcion.hora || !p.recepcion.firma)
-    lista.push({ bloquea: true, tipo: 'firma', texto: 'Falta nombre, hora o firma de quien recibe.' })
+    lista.push({ bloquea: true, tipo: 'firma', texto: 'Escribe el nombre del conjunto.' })
+  if (!String(p.operario || '').trim())
+    lista.push({ bloquea: true, tipo: 'firma', texto: 'Escribe el nombre del operario responsable.' })
+  if (!p.firma.nombre || !p.firma.hora || !p.firma.dibujo)
+    lista.push({
+      bloquea: true,
+      tipo: 'firma',
+      texto: 'Falta nombre, hora o firma del operario responsable.',
+    })
 
   if (especiales.value.includes('respaldoPlataforma') && !p.respaldoPlataforma.subido) {
     lista.push({
@@ -368,8 +354,7 @@ function alertasParada(p) {
     })
   }
 
-  const conNovedad = String(p.novedad || '').trim()
-  if (lista.some((a) => a.bloquea) && !conNovedad) {
+  if (lista.some((a) => a.bloquea) && !String(p.novedad || '').trim()) {
     lista.push({ bloquea: true, tipo: 'observacion', texto: 'Escribe la novedad de la parada.' })
   }
   return lista
@@ -378,7 +363,7 @@ function alertasParada(p) {
 function alertasCierre() {
   const lista = []
   if (!ruta.paradas.length) {
-    lista.push('La ruta no tiene paradas.')
+    lista.push('La hoja no tiene paradas.')
     return lista
   }
   const pendientes = ruta.paradas.filter((p) => p.estado === 'Pendiente')
@@ -410,8 +395,8 @@ function alertasCierre() {
 function movimiento(fila, tipoEvento, cantidad, p, s) {
   return {
     itemId: fila.itemId,
-    codigo: fila.codigo,
     referencia: fila.referencia,
+    fijo: !!fila.fijo,
     tipoServicio: ruta.tipoServicio,
     tipoEvento,
     cantidad,
@@ -421,15 +406,14 @@ function movimiento(fila, tipoEvento, cantidad, p, s) {
     paradaId: p.id,
     conjunto: p.conjunto,
     fechaHora: `${s.fecha}T${s.hora}:00`,
-    responsable: tipoEvento === 'recibido' ? p.recepcion.nombre : p.entrega.nombre,
+    responsable: p.operario,
     observacion: fila.observacion || p.novedad || '',
     sincronizado: !sinInternet.value,
   }
 }
 
 function eventoColumna(tipoEvento) {
-  if (tipoEvento === 'recibido') return 'recibido'
-  return 'devuelto'
+  return tipoEvento === 'recibido' ? 'recibido' : 'devuelto'
 }
 
 async function persistir(movs = []) {
@@ -456,7 +440,10 @@ async function persistir(movs = []) {
 async function guardarParcial() {
   borrador.guardar()
   const ok = await persistir([])
-  if (ok) mensaje.value = sinInternet.value ? 'Guardado en el dispositivo. Se sincronizará al volver la red.' : 'Ruta guardada.'
+  if (ok)
+    mensaje.value = sinInternet.value
+      ? 'Guardado en el dispositivo. Se sincronizará al volver la red.'
+      : 'Hoja guardada.'
 }
 
 async function confirmarParada(p) {
@@ -467,16 +454,16 @@ async function confirmarParada(p) {
   }
   const s = fechaHoraLocal()
   p.confirmadaEn = `${s.fecha}T${s.hora}:00`
-  p.confirmadaPor = auth.usuario?.email || auth.usuario?.uid || ''
+  p.confirmadaPor = p.operario
   p.estado = p.destino === 'otro_conjunto' ? 'En traslado' : 'Confirmada'
 
   if (p.destino === 'otro_conjunto') {
-    const siguiente = ruta.paradas[p.orden] // arreglo 0-based: la parada siguiente
+    const siguiente = ruta.paradas[p.orden]
     ruta.traslados.push({
       paradaId: p.id,
       desde: p.conjunto,
       hacia: siguiente?.conjunto || '(pendiente)',
-      confirmadoPor: p.confirmadaPor,
+      confirmadoPor: p.operario,
       fechaHora: p.confirmadaEn,
     })
   }
@@ -494,7 +481,6 @@ async function confirmarParada(p) {
     if (r.nombreOperario && r.fecha) {
       movs.push({
         itemId: 'retanqueo',
-        codigo: `RET-${r.paquete}`,
         referencia: `Retanqueo paquete ${r.paquete}`,
         tipoServicio: ruta.tipoServicio,
         tipoEvento: 'retanqueo',
@@ -516,15 +502,15 @@ async function confirmarParada(p) {
   if (!ok) return
   mensaje.value =
     p.destino === 'otro_conjunto'
-      ? `Parada confirmada. Equipo en traslado hacia ${ruta.traslados.at(-1)?.hacia || 'la siguiente parada'}.`
-      : 'Parada confirmada. El equipo regresa a la empresa.'
+      ? `Parada confirmada. Responsable: ${p.operario}. Equipo en traslado.`
+      : `Parada confirmada. Responsable: ${p.operario}. Equipo regresa a la empresa.`
   const siguiente = ruta.paradas.findIndex((x) => x.estado === 'Pendiente')
   if (siguiente >= 0) paradaActual.value = siguiente
 }
 
 async function cerrarRuta() {
   if (!auth.esAdmin) {
-    error.value = 'Solo el Admin puede cerrar la ruta.'
+    error.value = 'Solo el Admin puede cerrar la hoja.'
     return
   }
   const problemas = alertasCierre()
@@ -544,28 +530,7 @@ async function cerrarRuta() {
   ruta.cerradoPor = auth.usuario?.email || auth.usuario?.uid || ''
   ruta.cerradoEn = `${s.fecha}T${s.hora}:00`
   const ok = await persistir(movs)
-  if (ok) mensaje.value = 'Ruta cerrada. El historial y la trazabilidad ya están actualizados.'
-}
-
-// ---------------------------------------------------------------
-// Catalogo editable
-// ---------------------------------------------------------------
-
-async function guardarCodigo(item) {
-  item.codigo = String(item.codigo || '').trim().toUpperCase()
-  if (!item.codigo) {
-    error.value = 'El código no puede quedar vacío.'
-    return
-  }
-  try {
-    await guardarCodigoCatalogo(item)
-    aplicarCodigosCatalogo()
-    mensaje.value = `Código ${item.codigo} actualizado.`
-    error.value = ''
-  } catch (e) {
-    console.error(e)
-    error.value = 'No se pudo actualizar el código.'
-  }
+  if (ok) mensaje.value = 'Hoja cerrada. El historial y la trazabilidad ya están actualizados.'
 }
 
 // ---------------------------------------------------------------
@@ -588,12 +553,20 @@ async function cargarMovimientos() {
 }
 
 function abrirRuta(registro) {
+  if (estaVencida(registro.fecha) && registro.estado !== 'Cerrada') {
+    reiniciarRuta()
+    mensaje.value = `La hoja del ${registro.fecha} estaba vencida. Se limpió y salió una en blanco.`
+    return
+  }
   Object.keys(ruta).forEach((k) => delete ruta[k])
   Object.assign(ruta, JSON.parse(JSON.stringify(registro)))
+  if (!ruta.fechaVencimiento) ruta.fechaVencimiento = fechaVencimiento(ruta.fecha)
   rutaId.value = registro.id
   paradaActual.value = 0
   vista.value = 'ruta'
-  mensaje.value = `Ruta ${registro.id} abierta.`
+  mensaje.value = estaVencida(ruta.fecha)
+    ? 'Hoja vencida: se muestra solo para consulta.'
+    : `Hoja ${registro.id} abierta.`
   error.value = ''
 }
 
@@ -617,16 +590,15 @@ function filaCsv(valores) {
 
 function exportarRuta() {
   const filas = [
-    ['Ruta', ruta.id, ruta.fecha, ruta.vehiculo, ruta.conductor, nombreTipo(ruta.tipoServicio)],
-    ['Empresa', 'Enviado', 'Recibido', 'Devuelto', 'Código', 'Elemento', 'Observación'],
+    ['Hoja', ruta.id, ruta.fecha, nombreTipo(ruta.tipoServicio)],
+    ['Conjunto', 'Enviado', 'Recibido', 'Devuelto', 'Elemento', 'Observación'],
   ]
-  ;(ruta.paradas[paradaActual.value]?.items || ruta.preparacion.items).forEach((f) => {
+  ;(parada.value?.items || ruta.preparacion.items).forEach((f) => {
     filas.push([
-      ruta.paradas[paradaActual.value]?.conjunto || 'Preparación empresa',
+      parada.value?.conjunto || 'Preparación empresa',
       totalFila(f, 'enviado') ?? '',
       totalFila(f, 'recibido') ?? '',
       totalFila(f, 'devuelto') ?? '',
-      f.codigo,
       f.referencia,
       f.observacion,
     ])
@@ -653,11 +625,12 @@ const borrador = useBorrador({
   aplicar: (datos) => {
     Object.keys(ruta).forEach((k) => delete ruta[k])
     Object.assign(ruta, datos)
+    if (!ruta.fechaVencimiento) ruta.fechaVencimiento = fechaVencimiento(ruta.fecha)
     rutaId.value = datos.id || ''
     paradaActual.value = 0
   },
   alRestaurar: () => {
-    mensaje.value = 'Se recuperó la ruta que tenías sin guardar.'
+    mensaje.value = 'Se recuperó la hoja que tenías sin guardar.'
   },
 })
 
@@ -665,8 +638,6 @@ onMounted(async () => {
   window.addEventListener('online', actualizarRed)
   window.addEventListener('offline', actualizarRed)
   try {
-    catalogo.value = await cargarCatalogo()
-    aplicarCodigosCatalogo()
     await Promise.all([cargarHistorial(), cargarMovimientos()])
   } finally {
     cargandoDatos.value = false
@@ -686,20 +657,21 @@ onBeforeUnmount(() => {
         <div class="title-row">
           <img class="title-mark" src="/ICONO%20DE%20USUARIO.jpg" alt="Icono Clase Alpha" />
           <div>
-            <div class="eyebrow">Operaciones · Logística audiovisual</div>
-            <h1>Checklists por ruta</h1>
+            <div class="eyebrow">Operaciones · hoja física de la canasta</div>
+            <h1>Checklists por servicio</h1>
             <p class="subtitle">
-              Empresa → conjunto → conjunto → empresa. Cada parada queda registrada con quién entrega,
-              quién recibe y qué equipo continúa.
+              Guía entre operarios: cada uno es responsable de lo que recibe, entrega y devuelve.
+              La hoja va en la canasta y se vence 4 días después de su fecha.
             </p>
           </div>
         </div>
         <div class="top-badges">
-          <span class="badge">{{ rolTexto }}</span>
-          <span class="badge">Plantilla {{ plantilla.codigo }}</span>
+          <span class="badge">Admin</span>
+          <span class="badge">{{ nombreTipo(ruta.tipoServicio) }}</span>
           <span class="badge" :class="sinInternet ? 'badge-off' : 'badge-on'">
             {{ sinInternet ? 'Sin internet · guardando local' : 'En línea' }}
           </span>
+          <span v-if="rutaVencida" class="badge badge-off">Vencida · se asume regreso</span>
           <span class="badge" :class="rutaCerrada ? 'badge-on' : 'badge-warn'">{{ ruta.estado }}</span>
         </div>
       </div>
@@ -707,25 +679,22 @@ onBeforeUnmount(() => {
 
     <div class="contenedor">
       <nav class="tabs" aria-label="Secciones del checklist">
-        <button type="button" :class="{ active: vista === 'ruta' }" @click="vista = 'ruta'">Ruta</button>
+        <button type="button" :class="{ active: vista === 'ruta' }" @click="vista = 'ruta'">Hoja</button>
         <button type="button" :class="{ active: vista === 'historial' }" @click="vista = 'historial'">
           Historial
         </button>
         <button type="button" :class="{ active: vista === 'trazabilidad' }" @click="vista = 'trazabilidad'">
           Trazabilidad
         </button>
-        <button type="button" :class="{ active: vista === 'catalogo' }" @click="vista = 'catalogo'">
-          Catálogo de códigos
-        </button>
       </nav>
 
       <div v-if="mensaje" class="mensaje ok">{{ mensaje }}</div>
       <div v-if="error" class="mensaje error">{{ error }}</div>
 
-      <!-- ---------------- RUTA ---------------- -->
+      <!-- ---------------- HOJA ---------------- -->
       <template v-if="vista === 'ruta'">
         <div class="toolbar">
-          <button type="button" class="btn" @click="reiniciarRuta">＋ Nueva ruta</button>
+          <button type="button" class="btn" @click="reiniciarRuta">＋ Hoja en blanco</button>
           <button type="button" class="btn" :disabled="guardando" @click="guardarParcial">
             {{ guardando ? 'Guardando…' : '💾 Guardar' }}
           </button>
@@ -738,28 +707,33 @@ onBeforeUnmount(() => {
           <div class="panel-head">
             <span class="num">1</span>
             <div>
-              <h2>Datos de la ruta</h2>
-              <p>Selecciona el tipo de checklist. Todas las paradas usarán esa plantilla.</p>
+              <h2>Datos de la hoja</h2>
+              <p>Elige el servicio. El operario es el responsable de todo lo que anota aquí.</p>
             </div>
           </div>
           <div class="grid">
             <label>Fecha<input v-model="ruta.fecha" type="date" /></label>
-            <label>Vehículo<input v-model="ruta.vehiculo" placeholder="Placa o identificación" /></label>
-            <label>Conductor<input v-model="ruta.conductor" placeholder="Nombre del conductor" /></label>
             <label>
               Tipo de checklist
               <select v-model="ruta.tipoServicio" @change="cambiarTipo">
                 <option v-for="tipo in TIPOS_SERVICIO" :key="tipo" :value="tipo">
-                  {{ nombreTipo(tipo) }} · {{ PLANTILLAS[tipo].codigo }}
+                  {{ nombreTipo(tipo) }}
                 </option>
               </select>
             </label>
             <label v-if="especiales.includes('colorEquipo')">
-              Número / color de equipos<input v-model="ruta.colorEquipo" placeholder="Ej. VERDE" />
+              Color del equipo<input v-model="ruta.colorEquipo" placeholder="Ej. VERDE" />
+            </label>
+            <label v-if="especiales.includes('numeroEquipo')">
+              Número del equipo
+              <select v-model="ruta.numeroEquipo">
+                <option value="">Selecciona 1-8</option>
+                <option v-for="n in numerosEquipo" :key="n" :value="n">{{ n }}</option>
+              </select>
             </label>
             <label>
-              Empacado por
-              <input v-model="ruta.preparacion.empacadoPor" placeholder="Responsable de bodega" />
+              Operario que empaca
+              <input v-model="ruta.preparacion.operario" placeholder="Nombre del operario" />
             </label>
           </div>
           <div class="origen-destino">
@@ -769,6 +743,10 @@ onBeforeUnmount(() => {
             <span class="linea"></span>
             <span class="punto">🏢 Empresa</span>
           </div>
+          <div class="vencimiento" :class="{ vencida: rutaVencida }">
+            Vence: <strong>{{ ruta.fechaVencimiento }}</strong>
+            <span v-if="rutaVencida">· Se da por hecho que el carro llegó a la empresa.</span>
+          </div>
         </section>
 
         <section class="panel">
@@ -776,7 +754,7 @@ onBeforeUnmount(() => {
             <span class="num">2</span>
             <div>
               <h2>Preparación en empresa</h2>
-              <p>Aquí se define el Enviado inicial. El Enviado de la parada 1 sale de estos valores.</p>
+              <p>El Enviado inicial de la primera parada sale de estos valores.</p>
             </div>
           </div>
           <div class="tabla-wrap">
@@ -793,18 +771,18 @@ onBeforeUnmount(() => {
             <span class="num">3</span>
             <div>
               <h2>Paradas del servicio</h2>
-              <p>Máximo recomendado: 4. Se permite más con aviso para casos excepcionales.</p>
+              <p>Máximo recomendado: 4. Se permite más solo como excepción.</p>
             </div>
             <button type="button" class="btn" @click="agregarParada">＋ Agregar parada</button>
           </div>
 
           <div v-if="ruta.paradas.length > 4" class="aviso-excepcion">
-            ⚠ Esta ruta tiene {{ ruta.paradas.length }} paradas. Verifica que sea una excepción
+            ⚠ Esta hoja tiene {{ ruta.paradas.length }} paradas. Verifica que sea una excepción
             autorizada.
           </div>
 
           <div v-if="!ruta.paradas.length" class="vacio">
-            Agrega la primera parada para empezar el checklist.
+            Agrega la primera parada para empezar la hoja.
           </div>
 
           <template v-else>
@@ -826,12 +804,12 @@ onBeforeUnmount(() => {
             <template v-if="parada">
               <div class="parada-header grid">
                 <label>Conjunto residencial<input v-model="parada.conjunto" /></label>
-                <label>Dirección<input v-model="parada.direccion" /></label>
-                <label>Responsable del conjunto<input v-model="parada.responsable" /></label>
-                <label>Operarios de la atención<input v-model="parada.operariosAtencion" /></label>
+                <label>Nombre del operario<input v-model="parada.operario" /></label>
                 <label>Hora llegada<input v-model="parada.horaLlegada" type="time" /></label>
                 <label>Hora salida<input v-model="parada.horaSalida" type="time" /></label>
-                <template v-if="especiales.includes('respaldoPlataforma') || especiales.includes('respaldoAudio')">
+                <template
+                  v-if="especiales.includes('respaldoPlataforma') || especiales.includes('respaldoAudio')"
+                >
                   <label>Hora inicio asamblea<input v-model="parada.horaInicioAsamblea" type="time" /></label>
                   <label>Hora fin asamblea<input v-model="parada.horaFinAsamblea" type="time" /></label>
                 </template>
@@ -847,20 +825,12 @@ onBeforeUnmount(() => {
 
               <div class="firmas">
                 <div class="firma-card">
-                  <h3>Quién entrega</h3>
+                  <h3>Operario responsable</h3>
                   <div class="grid">
-                    <label>Nombre<input v-model="parada.entrega.nombre" /></label>
-                    <label>Hora<input v-model="parada.entrega.hora" type="time" /></label>
+                    <label>Nombre<input v-model="parada.firma.nombre" /></label>
+                    <label>Hora<input v-model="parada.firma.hora" type="time" /></label>
                   </div>
-                  <FirmaCanvas v-model="parada.entrega.firma" :alto="100" />
-                </div>
-                <div class="firma-card">
-                  <h3>Quién recibe</h3>
-                  <div class="grid">
-                    <label>Nombre<input v-model="parada.recepcion.nombre" /></label>
-                    <label>Hora<input v-model="parada.recepcion.hora" type="time" /></label>
-                  </div>
-                  <FirmaCanvas v-model="parada.recepcion.firma" :alto="100" />
+                  <FirmaCanvas v-model="parada.firma.dibujo" :alto="100" />
                 </div>
               </div>
 
@@ -924,8 +894,8 @@ onBeforeUnmount(() => {
                   <label># Canasta<input v-model="parada.respaldoAudio.numeroCanasta" /></label>
                 </div>
                 <p v-if="especiales.includes('referenciaVotacion')" class="nota">
-                  Si también se hizo votación, registra esa parada con el checklist de Votación.
-                  “Elementos de Votación” de esta planilla es solo una referencia, no se cuenta acá.
+                  Si también se hizo votación, regístrala en una hoja de Votación aparte. “Elementos
+                  de Votación” de esta planilla es solo una referencia, no se cuenta aquí.
                 </p>
               </div>
 
@@ -942,7 +912,9 @@ onBeforeUnmount(() => {
                   <span>{{ a.bloquea ? '⛔' : 'ℹ️' }}</span>
                   {{ a.texto }}
                 </div>
-                <div v-if="!alertasParada(parada).length" class="alerta ok">✅ Sin novedades. Lista para confirmar.</div>
+                <div v-if="!alertasParada(parada).length" class="alerta ok">
+                  ✅ Sin novedades. Lista para confirmar.
+                </div>
               </div>
 
               <div class="acciones-parada">
@@ -960,7 +932,9 @@ onBeforeUnmount(() => {
                         : 'Confirmar y registrar regreso'
                   }}
                 </button>
-                <button type="button" class="btn" @click="eliminarParada(parada.id)">Eliminar parada</button>
+                <button type="button" class="btn" @click="eliminarParada(parada.id)">
+                  Eliminar parada
+                </button>
                 <span v-if="parada.confirmadaPor" class="confirmado">
                   Confirmada por {{ parada.confirmadaPor }} el {{ parada.confirmadaEn }}
                 </span>
@@ -973,8 +947,8 @@ onBeforeUnmount(() => {
           <div class="panel-head">
             <span class="num">4</span>
             <div>
-              <h2>Cierre de la ruta</h2>
-              <p>El Admin revisa que no queden diferencias sin justificar y cierra la ruta.</p>
+              <h2>Cierre de la hoja</h2>
+              <p>El Admin revisa que no queden diferencias sin justificar y cierra.</p>
             </div>
           </div>
           <div class="resumen">
@@ -992,7 +966,7 @@ onBeforeUnmount(() => {
             :disabled="!auth.esAdmin || rutaCerrada || alertasCierre().length > 0 || guardando"
             @click="cerrarRuta"
           >
-            {{ rutaCerrada ? 'Ruta cerrada' : 'Cerrar ruta (Admin)' }}
+            {{ rutaCerrada ? 'Hoja cerrada' : 'Cerrar hoja (Admin)' }}
           </button>
         </section>
       </template>
@@ -1003,26 +977,29 @@ onBeforeUnmount(() => {
           <div class="panel-head">
             <span class="num">H</span>
             <div>
-              <h2>Historial de rutas</h2>
-              <p>Solo rutas nuevas. Los registros antiguos quedan guardados pero no se muestran acá.</p>
+              <h2>Historial de hojas</h2>
+              <p>Las hojas vencidas se limpian y salen en blanco al abrirlas.</p>
             </div>
           </div>
           <div class="grid filtros">
-            <label>Texto<input v-model="filtros.texto" placeholder="Vehículo, conductor, tipo…" /></label>
+            <label>Texto<input v-model="filtros.texto" placeholder="Tipo, estado, conjunto…" /></label>
             <label>Conjunto<input v-model="filtros.conjunto" placeholder="Nombre del conjunto" /></label>
             <label>Fecha<input v-model="filtros.fecha" type="date" /></label>
           </div>
-          <div v-if="cargandoDatos" class="vacio">Cargando rutas…</div>
-          <div v-else-if="!rutasFiltradas.length" class="vacio">No hay rutas con esos filtros.</div>
+          <div v-if="cargandoDatos" class="vacio">Cargando hojas…</div>
+          <div v-else-if="!rutasFiltradas.length" class="vacio">No hay hojas con esos filtros.</div>
           <div v-else class="lista">
             <div v-for="r in rutasFiltradas" :key="r.id" class="item-lista">
               <div>
-                <strong>{{ r.fecha }} · {{ nombreTipo(r.tipoServicio) }}</strong>
+                <strong>
+                  {{ r.fecha }} · {{ nombreTipo(r.tipoServicio) }}
+                  <span v-if="estaVencida(r.fecha)" class="chip-vencida">vencida</span>
+                </strong>
                 <p>
-                  {{ r.vehiculo || 'Sin vehículo' }} · {{ r.conductor || 'Sin conductor' }} ·
-                  {{ (r.paradas || []).length }} parada(s)
+                  {{ (r.paradas || []).length }} parada(s) ·
+                  {{ (r.paradas || []).map((p) => p.conjunto).join(' → ') }}
                 </p>
-                <small>{{ (r.paradas || []).map((p) => p.conjunto).join(' → ') }}</small>
+                <small>Vence {{ r.fechaVencimiento || fechaVencimiento(r.fecha) }}</small>
               </div>
               <span class="badge" :class="r.estado === 'Cerrada' ? 'badge-on' : 'badge-warn'">
                 {{ r.estado }}
@@ -1039,12 +1016,12 @@ onBeforeUnmount(() => {
           <div class="panel-head">
             <span class="num">T</span>
             <div>
-              <h2>Trazabilidad de equipos</h2>
-              <p>Busca por código, equipo, conjunto o fecha para ver por dónde ha pasado.</p>
+              <h2>Trazabilidad por referencia</h2>
+              <p>Busca por elemento, conjunto o fecha para ver por dónde ha pasado.</p>
             </div>
           </div>
           <div class="grid filtros">
-            <label>Equipo o código<input v-model="filtros.equipo" placeholder="Ej. MICI-001" /></label>
+            <label>Elemento<input v-model="filtros.equipo" placeholder="Ej. Micrófono" /></label>
             <label>Conjunto<input v-model="filtros.conjunto" placeholder="Nombre del conjunto" /></label>
             <label>Fecha<input v-model="filtros.fecha" type="date" /></label>
           </div>
@@ -1054,8 +1031,8 @@ onBeforeUnmount(() => {
               <thead>
                 <tr>
                   <th>Fecha</th>
-                  <th>Código</th>
                   <th>Elemento</th>
+                  <th>Fijo</th>
                   <th>Evento</th>
                   <th>Conjunto</th>
                   <th>Responsable</th>
@@ -1066,51 +1043,13 @@ onBeforeUnmount(() => {
               <tbody>
                 <tr v-for="(m, i) in movimientosFiltrados" :key="`${m.rutaId}-${m.secuencia}-${i}`">
                   <td>{{ String(m.fechaHora || '').slice(0, 16).replace('T', ' ') }}</td>
-                  <td><code>{{ m.codigo }}</code></td>
                   <td>{{ m.referencia }}</td>
+                  <td>{{ m.fijo ? '🔴 fijo' : '—' }}</td>
                   <td>{{ m.tipoEvento.replaceAll('_', ' ') }}</td>
                   <td>{{ m.conjunto || 'Empresa' }}</td>
                   <td>{{ m.responsable || '—' }}</td>
                   <td>{{ m.cantidad ?? '—' }}</td>
                   <td>{{ m.observacion || '' }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </template>
-
-      <!-- ---------------- CATALOGO ---------------- -->
-      <template v-else>
-        <section class="panel">
-          <div class="panel-head">
-            <span class="num">C</span>
-            <div>
-              <h2>Catálogo compartido</h2>
-              <p>
-                Un solo código por equipo, aunque aparezca en Sonido, Votación y Grabación.
-                Los códigos se generan automáticamente y se pueden editar.
-              </p>
-            </div>
-          </div>
-          <div class="tabla-wrap">
-            <table class="trazas">
-              <thead>
-                <tr>
-                  <th>Código</th>
-                  <th>Elemento</th>
-                  <th>Grupo</th>
-                  <th>Tipo</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="item in catalogo" :key="item.id">
-                  <td><input v-model="item.codigo" class="codigo-input" /></td>
-                  <td>{{ item.referencia }}</td>
-                  <td>{{ item.grupo }}</td>
-                  <td>{{ item.consumible ? 'Consumible' : 'Durable' }}</td>
-                  <td><button type="button" class="btn btn-sm" @click="guardarCodigo(item)">Guardar</button></td>
                 </tr>
               </tbody>
             </table>
@@ -1277,10 +1216,6 @@ h1 {
   border-color: var(--blue);
   color: #fff;
 }
-.btn-sm {
-  font-size: 0.72rem;
-  padding: 0.3rem 0.5rem;
-}
 .panel {
   background: #fff;
   border: 1px solid var(--line);
@@ -1385,6 +1320,16 @@ textarea:focus {
   font-size: 0.78rem;
   font-weight: 700;
   white-space: nowrap;
+}
+.vencimiento {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.76rem;
+  padding: 0.6rem 1.1rem;
+}
+.vencimiento.vencida {
+  background: #fff1f0;
+  color: #a42d22;
 }
 .tabla-wrap {
   padding: 0.9rem 1.1rem;
@@ -1581,6 +1526,15 @@ textarea:focus {
   font-size: 0.74rem;
   margin: 0.2rem 0 0;
 }
+.chip-vencida {
+  background: #ffe7e4;
+  border-radius: 99px;
+  color: #a42d22;
+  font-size: 0.62rem;
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.4rem;
+  text-transform: uppercase;
+}
 .trazas {
   font-size: 0.78rem;
   min-width: 900px;
@@ -1595,9 +1549,6 @@ textarea:focus {
 .trazas td {
   border-bottom: 1px solid #e7edf3;
   padding: 0.45rem 0.55rem;
-}
-.codigo-input {
-  min-height: 32px;
 }
 @media (max-width: 720px) {
   .retanqueo {

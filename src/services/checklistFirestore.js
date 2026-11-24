@@ -1,12 +1,11 @@
 // Persistencia del modulo de checklists por ruta.
 //
-// El catalogo se guarda en `checklistCatalogo` (un documento por item) para que
-// los codigos editados por Lina sean los mismos para Admin y Conductor. Las rutas
-// viven en `checklistRutas`; los movimientos van en una coleccion plana aparte
-// para poder consultar la historia de un equipo sin recorrer todas las rutas.
+// No hay catalogo de codigos: cada elemento se identifica por su referencia.
+// Las rutas viven en `checklistRutas`; los movimientos van en una coleccion
+// plana aparte para consultar la historia de un equipo sin recorrer rutas.
 //
 // Firestore encola las escrituras cuando no hay red (persistencia local en
-// firebase/index.js), asi que el operario puede seguir trabajando en la ruta.
+// firebase/index.js), asi que el operario puede seguir trabajando en la hoja.
 import {
   collection,
   doc,
@@ -16,49 +15,12 @@ import {
   writeBatch,
 } from '@/services/firestore'
 import { db } from '@/firebase'
-import { crearCatalogo } from '@/utils/checklistPlantillas'
 
-const COLECCION_CATALOGO = 'checklistCatalogo'
 const COLECCION_RUTAS = 'checklistRutas'
 const COLECCION_MOVIMIENTOS = 'movimientosEquipo'
 
 function desdeFirestore(snap) {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-}
-
-export async function cargarCatalogo() {
-  const porDefecto = crearCatalogo()
-  try {
-    const snap = await getDocs(collection(db, COLECCION_CATALOGO))
-    const guardados = desdeFirestore(snap)
-    if (!guardados.length) {
-      // Inicializacion controlada: no migra datos viejos, solo crea el catalogo
-      // nuevo con los codigos generados automáticamente.
-      const batch = writeBatch(db)
-      porDefecto.forEach((item) => {
-        batch.set(doc(db, COLECCION_CATALOGO, item.id), { ...item, actualizadoEn: serverTimestamp() })
-      })
-      await batch.commit()
-      return porDefecto
-    }
-    const porId = Object.fromEntries(guardados.map((i) => [i.id, i]))
-    return porDefecto.map((item) => ({
-      ...item,
-      ...porId[item.id],
-      codigo: porId[item.id]?.codigo || item.codigo,
-    }))
-  } catch (error) {
-    console.warn('No se pudo cargar el catálogo del checklist; se usa el local', error)
-    return porDefecto
-  }
-}
-
-export async function guardarCodigoCatalogo(item) {
-  await setDoc(
-    doc(db, COLECCION_CATALOGO, item.id),
-    { codigo: String(item.codigo || '').trim().toUpperCase(), actualizadoEn: serverTimestamp() },
-    { merge: true },
-  )
 }
 
 export async function listarRutas() {

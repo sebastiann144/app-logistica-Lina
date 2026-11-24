@@ -264,14 +264,15 @@ const categoriasAlertas = computed(() => {
     }
   })
 
-  // Checklist por ruta: rutas que siguen abiertas y ya pasó su fecha.
-  filtro.filtrar(datos.checklistRutas, 'vehiculo').forEach((r) => {
+  // Checklist por ruta: hojas abiertas que ya pasaron su fecha de vencimiento.
+  filtro.filtrar(datos.checklistRutas).forEach((r) => {
     if (r.estado !== 'Cerrada' && r.fecha && r.fecha < hoy()) {
+      const conjunto = (r.paradas || []).map((p) => p.conjunto).filter(Boolean).join(' → ')
       addAlerta(
         'Checklist Despacho',
         '📋',
         '#f59e0b',
-        `${r.vehiculo || 'Sin vehículo'} — ruta del ${r.fecha} sigue ${r.estado || 'abierta'}`,
+        `${conjunto || 'Hoja sin conjunto'} — hoja del ${r.fecha} sigue ${r.estado || 'abierta'}`,
         'warning',
       )
     }
@@ -402,7 +403,9 @@ async function confirmarReserva(r) {
         </div>
         <div v-if="resumenDespacho.ultima">
           Última:
-          <strong>{{ resumenDespacho.ultima.vehiculo || 'Sin vehículo' }}</strong>
+          <strong>
+            {{ (resumenDespacho.ultima.paradas || [])[0]?.conjunto || 'Sin conjunto' }}
+          </strong>
           <span style="color: #6b7280">
             · {{ resumenDespacho.ultima.fecha || 'sin fecha' }} ·
             {{ resumenDespacho.ultima.tipoServicio || 'sin tipo' }}

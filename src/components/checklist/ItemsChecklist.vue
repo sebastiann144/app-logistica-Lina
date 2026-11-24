@@ -3,6 +3,9 @@
 // La usa la preparacion en empresa (solo Enviado) y cada parada
 // (Enviado / Recibido / Devuelto). No decide reglas: solo muestra los datos y
 // avisa al padre cuando cambia una cantidad.
+//
+// El badge "fijo" marca los numeros rojos de la planilla fisica: elementos que
+// siempre van en esa canasta y casi no se mueven.
 import { computed, ref } from 'vue'
 import { totalFila } from '@/utils/checklistPlantillas'
 
@@ -27,8 +30,11 @@ function porItem(itemId) {
 }
 
 function actualizar(itemId, campo, valor) {
+  const texto = campo === 'observacion'
   const copia = props.items.map((f) =>
-    f.itemId === itemId ? { ...f, [campo]: valor === '' ? '' : Number(valor) } : f,
+    f.itemId === itemId
+      ? { ...f, [campo]: texto || valor === '' ? String(valor) : Number(valor) }
+      : f,
   )
   emit('update:items', copia)
 }
@@ -81,7 +87,6 @@ const filaConDosCantidades = computed(() => props.items.some((f) => f.dosCantida
             <thead>
               <tr>
                 <th class="col-item">Elemento</th>
-                <th class="col-codigo">Código</th>
                 <th v-for="col in columnas" :key="col" class="col-num">{{ col }}</th>
                 <th v-if="filaConDosCantidades && modo === 'parada'" class="col-detalle">
                   Detalle nuevas / usadas
@@ -91,12 +96,16 @@ const filaConDosCantidades = computed(() => props.items.some((f) => f.dosCantida
               </tr>
             </thead>
             <tbody>
-              <tr v-for="item in grupo.items" :key="item.id" :class="{ consumible: item.consumible }">
+              <tr
+                v-for="item in grupo.items"
+                :key="item.id"
+                :class="{ consumible: item.consumible, fijo: item.fijo }"
+              >
                 <td class="col-item">
                   <span class="referencia">{{ item.referencia }}</span>
+                  <span v-if="item.fijo" class="chip-fijo">fijo</span>
                   <span v-if="item.consumible" class="chip-consumible">consumible</span>
                 </td>
-                <td class="col-codigo"><code>{{ item.codigo }}</code></td>
 
                 <td class="col-num">
                   <input
@@ -216,7 +225,7 @@ const filaConDosCantidades = computed(() => props.items.some((f) => f.dosCantida
 }
 table {
   border-collapse: collapse;
-  min-width: 980px;
+  min-width: 900px;
   width: 100%;
 }
 th {
@@ -236,11 +245,12 @@ td {
 tr.consumible {
   background: #f7fbff;
 }
-.col-item {
-  min-width: 210px;
+tr.fijo .referencia {
+  color: #a42d22;
+  font-weight: 800;
 }
-.col-codigo {
-  min-width: 110px;
+.col-item {
+  min-width: 240px;
 }
 .col-num {
   min-width: 78px;
@@ -254,23 +264,26 @@ tr.consumible {
 .col-obs {
   min-width: 190px;
 }
-code {
-  color: #155b87;
-  font-size: 0.72rem;
-}
 .referencia {
-  display: block;
+  display: inline;
 }
+.chip-fijo,
 .chip-consumible {
-  background: #e6f4ff;
   border-radius: 99px;
-  color: #155b87;
   display: inline-block;
   font-size: 0.62rem;
   font-weight: 800;
-  margin-top: 0.15rem;
+  margin-left: 0.35rem;
   padding: 0.05rem 0.4rem;
   text-transform: uppercase;
+}
+.chip-fijo {
+  background: #ffe7e4;
+  color: #a42d22;
+}
+.chip-consumible {
+  background: #e6f4ff;
+  color: #155b87;
 }
 input {
   background: #fff;
@@ -322,7 +335,7 @@ input:focus {
 }
 @media (max-width: 720px) {
   table {
-    min-width: 860px;
+    min-width: 790px;
   }
 }
 </style>
