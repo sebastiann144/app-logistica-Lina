@@ -1,5 +1,13 @@
 {
   "projects": {
     "default": "prestamo-revision--carro-alpha"
+  },
+  "targets": {
+    "prestamo-revision--carro-alpha": {
+      "hosting": {
+        "prod": ["prestamo-revision--carro-alpha"],
+        "dev": ["clase-alpha-dev"]
+      }
+    }
   }
 }
