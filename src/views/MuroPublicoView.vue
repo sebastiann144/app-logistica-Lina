@@ -24,12 +24,29 @@ const prestamos = computed(() => [...datos.prestamos].reverse())
 const equipos = computed(() => [...datos.equipos].reverse())
 // Una reserva confirmada pasa a estado "Solicitado" y sale de la lista.
 const reservas = computed(() => datos.reservas.filter((r) => r.estado !== 'Solicitado'))
-const opcionesVehiculos = computed(() =>
-  datos.vehiculos.map((v) => ({
-    placa: v.placa,
-    texto: `${v.placa} - ${v.marca} ${v.modelo}`,
-  })),
-)
+// El visitante necesita poder elegir placa. Ademas del catalogo de vehiculos se
+// toman las placas que ya aparecen en reservas/prestamos (colecciones que el
+// muro siempre muestra), para que el select nunca quede vacio por un dato que
+// no alcanzo a cargar.
+const opcionesVehiculos = computed(() => {
+  const porPlaca = new Map()
+  const agregar = (placa, texto) => {
+    const value = String(placa || '').trim()
+    if (!value || porPlaca.has(value)) return
+    porPlaca.set(value, { placa: value, texto })
+  }
+
+  datos.vehiculos.forEach((v) => {
+    agregar(v.placa, `${v.placa} - ${v.marca || ''} ${v.modelo || ''}`.trim())
+  })
+  datos.reservas.forEach((r) => agregar(r.vehiculo, `${r.vehiculo} (reserva anterior)`))
+  datos.prestamos.forEach((p) => agregar(p.vehiculo, `${p.vehiculo} (prestamo anterior)`))
+
+  return [...porPlaca.values()].sort((a, b) => a.placa.localeCompare(b.placa))
+})
+
+const cargandoVehiculos = computed(() => datos.cargando)
+const sinVehiculos = computed(() => !cargandoVehiculos.value && !opcionesVehiculos.value.length)
 
 // ---------------------------------------------------------------
 // Modales
@@ -73,7 +90,27 @@ const borradorEquipo = useBorrador({
 })
 const restauradoEquipo = borradorEquipo.restaurado
 
-function abrirModalPrestamo(item) {
+// Si el catalogo de vehiculos no cargo (red lenta o lectura incompleta), se
+// vuelve a pedir justo cuando el visitante abre el modal del selector.
+async function asegurarVehiculos() {
+  if (opcionesVehiculos.value.length) return
+  await Promise.all([
+    datos.recargar('vehiculos'),
+    datos.recargar('reservas'),
+    datos.recargar('prestamos'),
+  ])
+}
+
+async function recargarVehiculos() {
+  await Promise.all([
+    datos.recargar('vehiculos'),
+    datos.recargar('reservas'),
+    datos.recargar('prestamos'),
+  ])
+}
+
+async function abrirModalPrestamo(item) {
+  await asegurarVehiculos()
   formPrestamo.value = item
     ? {
         id: item.id,
@@ -101,7 +138,8 @@ function abrirModalPrestamo(item) {
   if (!item) borradorPrestamo.reiniciar()
 }
 
-function abrirModalReserva() {
+async function abrirModalReserva() {
+  await asegurarVehiculos()
   formReserva.value = { solicitante: '', vehiculo: '', fecha: hoy(), hora: ahora() }
   modalReserva.value = true
   borradorReserva.reiniciar()
@@ -385,11 +423,28 @@ function verFirma(dataUrl) {
         <div>
           <label>Vehículo</label>
           <select v-model="formPrestamo.vehiculo" required>
-            <option value="">Seleccione</option>
+            <option value="" disabled>
+              {{
+                cargandoVehiculos
+                  ? 'Cargando vehículos…'
+                  : sinVehiculos
+                    ? 'No hay vehículos disponibles'
+                    : 'Seleccione'
+              }}
+            </option>
             <option v-for="v in opcionesVehiculos" :key="v.placa" :value="v.placa">
               {{ v.texto }}
             </option>
           </select>
+          <button
+            v-if="sinVehiculos"
+            type="button"
+            class="btn btn-outline btn-sm"
+            style="margin-top: 0.35rem"
+            @click="recargarVehiculos"
+          >
+            Recargar vehículos
+          </button>
         </div>
         <div><label>Solicitante</label><input v-model="formPrestamo.solicitante" required /></div>
         <div><label>Fecha Salida</label><input v-model="formPrestamo.fechaSalida" type="date" required /></div>
@@ -422,11 +477,28 @@ function verFirma(dataUrl) {
         <div>
           <label>Vehículo</label>
           <select v-model="formReserva.vehiculo" required>
-            <option value="">Seleccione</option>
+            <option value="" disabled>
+              {{
+                cargandoVehiculos
+                  ? 'Cargando vehículos…'
+                  : sinVehiculos
+                    ? 'No hay vehículos disponibles'
+                    : 'Seleccione'
+              }}
+            </option>
             <option v-for="v in opcionesVehiculos" :key="v.placa" :value="v.placa">
               {{ v.texto }}
             </option>
           </select>
+          <button
+            v-if="sinVehiculos"
+            type="button"
+            class="btn btn-outline btn-sm"
+            style="margin-top: 0.35rem"
+            @click="recargarVehiculos"
+          >
+            Recargar vehículos
+          </button>
         </div>
         <div><label>Fecha</label><input v-model="formReserva.fecha" type="date" required /></div>
         <div><label>Hora</label><input v-model="formReserva.hora" type="time" required /></div>
