@@ -99,11 +99,6 @@ const borradorReserva = useBorrador({
 })
 const restauradoReserva = borradorReserva.restaurado
 
-// autoEstadoPrestamo (2411-2417): con fecha y hora de entrada queda 'Devuelto'.
-const estadoFormPrestamo = computed(() =>
-  formPrestamo.value.fechaEntrada && formPrestamo.value.horaEntrada ? 'Devuelto' : 'En uso',
-)
-
 // abrirModalPrestamo (2418): item = prestamo a editar, sin item = nuevo.
 function abrirModalPrestamo(item) {
   formPrestamo.value = item
@@ -115,6 +110,7 @@ function abrirModalPrestamo(item) {
         horaSalida: item.horaSalida || '',
         fechaEntrada: item.fechaEntrada || '',
         horaEntrada: item.horaEntrada || '',
+        estado: item.estado || 'En uso',
         obs: item.obs || '',
       }
     : {
@@ -126,6 +122,7 @@ function abrirModalPrestamo(item) {
         horaSalida: ahora(),
         fechaEntrada: '',
         horaEntrada: '',
+        estado: 'En uso',
         obs: '',
       }
   modalPrestamo.value = true
@@ -165,7 +162,7 @@ async function guardarPrestamo() {
     horaSalida: f.horaSalida,
     fechaEntrada: f.fechaEntrada || null,
     horaEntrada: f.horaEntrada || null,
-    estado: estadoFormPrestamo.value,
+    estado: f.estado,
     obs: f.obs,
   }
   if (f.id) await actualizar('prestamos', f.id, obj)
@@ -397,11 +394,10 @@ async function eliminarReserva(r) {
         <div><label>Hora Entrada</label><input v-model="formPrestamo.horaEntrada" type="time" /></div>
         <div>
           <label>Estado</label>
-          <input
-            :value="estadoFormPrestamo === 'Devuelto' ? '✓ Devuelto' : '● En uso'"
-            readonly
-            style="background:#f3f4f6;font-weight:600"
-          />
+          <select v-model="formPrestamo.estado">
+            <option value="En uso">En uso</option>
+            <option value="Devuelto">Devuelto</option>
+          </select>
         </div>
         <div class="full"><label>Observaciones</label><textarea v-model="formPrestamo.obs" rows="2"></textarea></div>
         <div class="full" style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.5rem">
